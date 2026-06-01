@@ -17,6 +17,8 @@ BASE_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/ultracode-shim"
 SETTINGS="$BASE_STATE/ultracode_settings.json"
 PID_FILE="$BASE_STATE/proxy.pid"
 LOG_FILE="$BASE_STATE/proxy.log"
+REF_DIR="$BASE_STATE/refs"      # one marker file per live session using the proxy
+OWNER_REF="$REF_DIR/$$"         # this launcher's marker (named by its own PID)
 
 PY="$(command -v python3 || command -v python || true)"
 [[ -n "$PY" ]] || { echo "Python 3 not found." >&2; exit 1; }
@@ -62,8 +64,36 @@ with urllib.request.urlopen(sys.argv[1].rstrip('/')+'/healthz',timeout=2) as r:
 PY
 }
 
+# The proxy is a shared singleton: several UltraCode sessions point at the same
+# loopback port and reuse one proxy. We reference-count its users with a marker
+# file per session so that one session exiting can't tear the proxy out from
+# under another (the old unconditional `trap stop_proxy EXIT` did exactly that --
+# a 2nd shell's exit, or the owner exiting first, killed a proxy still in use,
+# leaving the survivor on ConnectionRefused). The proxy stops only when the LAST
+# user exits.
+prune_refs() {
+  [[ -d "$REF_DIR" ]] || return 0
+  local f pid
+  for f in "$REF_DIR"/*; do
+    [[ -e "$f" ]] || continue                  # empty dir -> glob stays literal
+    pid="${f##*/}"
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      kill -0 "$pid" 2>/dev/null || rm -f "$f"  # drop markers of dead sessions
+    else
+      rm -f "$f"
+    fi
+  done
+}
+
+refs_active() {
+  prune_refs
+  [[ -d "$REF_DIR" ]] && [[ -n "$(ls -A "$REF_DIR" 2>/dev/null)" ]]
+}
+
 start_proxy() {
-  if health_ok; then return 0; fi
+  mkdir -p "$REF_DIR"
+  : > "$OWNER_REF"                  # register this session as a proxy user
+  if health_ok; then return 0; fi   # someone already started it -> reuse, don't respawn
   echo "Starting UltraCode proxy on $BASE_URL -> $UPSTREAM ..."
   UC_CONFIG="$CONFIG" UC_LISTEN_PORT="$PORT" UC_UPSTREAM="$UPSTREAM" UC_LOG="$LOG_FILE" \
     "$PY" "$PROXY" >>"$LOG_FILE" 2>&1 &
@@ -75,6 +105,8 @@ start_proxy() {
 }
 
 stop_proxy() {
+  rm -f "$OWNER_REF"                 # this session is done with the proxy
+  if refs_active; then return 0; fi  # other live sessions still need it -> leave it running
   [[ -f "$PID_FILE" ]] && kill "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null || true
   rm -f "$PID_FILE"
 }
