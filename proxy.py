@@ -132,6 +132,20 @@ ROUTER_TIMEOUT = float(os.environ.get("UC_ROUTER_TIMEOUT", "12"))
 ROUTER_MAX_TOKENS = int(os.environ.get("UC_ROUTER_MAX_TOKENS", "600"))
 ROUTER_LOG = os.environ.get("UC_ROUTER_LOG", "0") == "1"
 
+# Routing directives ("pins"): a prompt tag like [[route:codex]] / @codex forces a
+# single request onto a specific backend, overriding orchestrator/worker selection
+# AND the Auto Router. This is what lets an automated multi-agent workflow land each
+# spawned sub-agent on the right model by role (plan->opus, code->composer, ...).
+# OPT-IN: OFF unless turned on via "directives": {"enabled": true} in config.json
+# (or UC_DIRECTIVES=1). Default => exact prior behavior, so this never disrupts an
+# existing setup that hasn't asked for it. Final value is resolved in
+# _configure_directives(); this is only the pre-config default. See docs/DIRECTIVES.md.
+DIRECTIVES_ENABLED = os.environ.get("UC_DIRECTIVES") == "1"
+DIRECTIVES_NL = os.environ.get("UC_DIRECTIVES_NL", "1") != "0"   # natural-language fallback
+DIRECTIVES_LOG = os.environ.get("UC_DIRECTIVES_LOG", "0") == "1"
+DIRECTIVES = {"planner": None, "strip": True}   # filled from config in main()
+_ROUTE_ALIASES = {}                              # normalized token -> concrete route id
+
 try:
     UC_MODEL_MAP = json.loads(os.environ.get("UC_MODEL_MAP", "") or "{}")
     if not isinstance(UC_MODEL_MAP, dict):
@@ -614,6 +628,215 @@ def _wire_orchestrator_worker():
 
 
 # --------------------------------------------------------------------------
+# Routing directives ("pins") -- force a request onto a specific backend
+# --------------------------------------------------------------------------
+# A workflow (or a human) can tag a request's prompt to pin it to ONE backend,
+# overriding the orchestrator/worker selection AND the Auto Router. This is how an
+# automated multi-agent workflow lands each spawned sub-agent on the right model by
+# role -- e.g. plan->opus, code->composer, review->codex, fix->claude -- with no
+# turn-by-turn driving: the workflow script bakes a role tag into each agent()
+# prompt and the proxy hard-pins that request.
+#
+# Marker tiers (case-insensitive), most explicit first; a tier wins only if it
+# resolves to EXACTLY ONE configured backend (naming two models is ambiguous ->
+# ignored, normal routing decides):
+#   1. [[route:codex]]                         sentinel  (stripped before forwarding)
+#   2. @codex  use:codex  route:codex  model:codex   tag   (stripped)
+#   3. "...have codex review...", "ask codex to ..."  natural language (UC_DIRECTIVES_NL)
+#
+# The token after a marker is resolved through an alias table auto-derived from
+# your model ids + display names (plus router.aliases / directives.aliases
+# overrides). A pin to an unconfigured or "auto" route is ignored so a request is
+# never broken.
+_DIRECTIVE_SENTINEL = re.compile(r"\[\[\s*(?:route|model|use)\s*:\s*([A-Za-z0-9._\-]+)\s*\]\]", re.I)
+_DIRECTIVE_TAG = re.compile(r"(?:^|[\s(])(?:@|(?:route|model|use)\s*:\s*)([A-Za-z0-9._\-]+)", re.I)
+_DIRECTIVE_NL = re.compile(r"\b(?:use|using|have|ask|let|route\s+to|via|with)\s+([A-Za-z0-9._\-]+)", re.I)
+
+
+def _norm_alias(s):
+    """Lowercase + strip non-alphanumerics so 'GPT-5.5', 'gpt5.5', 'gpt_5_5' all
+    collapse to one matchable key."""
+    return re.sub(r"[^a-z0-9]+", "", str(s).lower())
+
+
+def _resolve_alias(token):
+    return _ROUTE_ALIASES.get(_norm_alias(token))
+
+
+def _latest_user_turn(anth_body):
+    """(message_dict, plain_text) of the newest user turn carrying real
+    instruction text. Pure tool_result turns (tool round-trips) are skipped so a
+    sub-agent's task tag stays sticky across its tool calls. (None, "") if none."""
+    for m in reversed(anth_body.get("messages") or []):
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, list):
+            non_tool = [b for b in content
+                        if not (isinstance(b, dict) and b.get("type") == "tool_result")]
+            if not non_tool:
+                continue
+            txt = _text_from_anthropic_content(non_tool)
+        else:
+            txt = content if isinstance(content, str) else _text_from_anthropic_content(content)
+        txt = (txt or "").strip()
+        if txt:
+            return m, txt
+    return None, ""
+
+
+def _detect_directive(text):
+    """(route_ids, spans, tier) for the most explicit marker tier that resolves to
+    one or more configured backends. `spans` are the literal marker substrings to
+    strip (empty for the natural-language tier -- that's prose, left intact)."""
+    def scan(pattern):
+        ids, spans, seen = [], [], set()
+        for m in pattern.finditer(text):
+            rid = _resolve_alias(m.group(1))
+            if not rid:
+                continue
+            spans.append(m.group(0))
+            if rid not in seen:
+                seen.add(rid)
+                ids.append(rid)
+        return ids, spans
+    ids, spans = scan(_DIRECTIVE_SENTINEL)
+    if ids:
+        return ids, spans, "sentinel"
+    ids, spans = scan(_DIRECTIVE_TAG)
+    if ids:
+        return ids, spans, "tag"
+    if DIRECTIVES_NL:
+        ids, _ = scan(_DIRECTIVE_NL)
+        if ids:
+            return ids, [], "nl"
+    return [], [], None
+
+
+def _strip_spans_in_msg(msg, spans):
+    """Remove matched marker substrings from a user turn's text in-place so the
+    backend model never sees the routing tag."""
+    if not spans or not isinstance(msg, dict):
+        return
+    def clean(s):
+        for sp in spans:
+            s = s.replace(sp, " ")
+        return re.sub(r"[ \t]{2,}", " ", s).strip()
+    content = msg.get("content")
+    if isinstance(content, str):
+        msg["content"] = clean(content)
+    elif isinstance(content, list):
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str):
+                b["text"] = clean(b["text"])
+
+
+def _directive_pin(body):
+    """Route id this request is pinned to by a prompt directive, or None. Strips
+    the marker text in-place when a pin is found. Never raises."""
+    if not DIRECTIVES_ENABLED:
+        return None
+    try:
+        msg, text = _latest_user_turn(body)
+        if not text:
+            return None
+        ids, spans, tier = _detect_directive(text)
+        if len(ids) != 1:
+            if len(ids) > 1 and DIRECTIVES_LOG:
+                log("[directive] ambiguous (%s named); ignored" % ", ".join(ids))
+            return None
+        rid = ids[0]
+        slot = UC_SLOT_MAP.get(rid)
+        if not isinstance(slot, dict) or slot.get("type") == "auto":
+            if DIRECTIVES_LOG:
+                log("[directive] '%s' (%s) not a usable backend; ignored" % (rid, tier))
+            return None
+        if DIRECTIVES.get("strip", True) and spans:
+            _strip_spans_in_msg(msg, spans)
+        return rid
+    except Exception as e:
+        if DIRECTIVES_LOG:
+            log("[directive] error: %s" % e)
+        return None
+
+
+def _is_plan_mode(body):
+    """True when the request is the interactive planning loop (the harness offers
+    ExitPlanMode only while in plan mode)."""
+    for t in body.get("tools") or []:
+        if isinstance(t, dict) and t.get("name") == "ExitPlanMode":
+            return True
+    return False
+
+
+def _configure_directives(cfg):
+    """Build the alias table for prompt routing directives from configured
+    models/routes, plus optional overrides. Idempotent; called from main()."""
+    global _ROUTE_ALIASES, DIRECTIVES_ENABLED
+    if not isinstance(cfg, dict):
+        cfg = {}
+    aliases = {}
+    STOP = {"the", "real", "auto", "smart", "routing", "router", "worker", "experimental",
+            "cursor", "oauth", "fast", "flash", "pro", "plus", "max", "mini", "via", "pay",
+            "you", "model", "plan", "code", "chat", "api", "beta", "preview"}
+
+    def add(token, rid):
+        key = _norm_alias(token)
+        if not key or key in STOP:
+            return
+        if key in aliases:
+            if aliases[key] != rid:
+                aliases[key] = None          # collision -> ambiguous, disable
+        else:
+            aliases[key] = rid
+
+    display = {m.get("id"): m.get("display_name", "") for m in (UC_MODELS or [])}
+    for rid, slot in (UC_SLOT_MAP or {}).items():
+        if not isinstance(slot, dict) or slot.get("type") == "auto":
+            continue
+        if rid.startswith(WORKER_ID_PREFIX):
+            continue
+        add(rid, rid)
+        if rid.startswith("claude-"):
+            add(rid[len("claude-"):], rid)
+        for w in re.findall(r"[A-Za-z][A-Za-z0-9.]+", display.get(rid, "")):
+            if w.lower() not in STOP and len(w) >= 3:
+                add(w.lower(), rid)
+        mv = slot.get("model")
+        if isinstance(mv, str) and mv:
+            seg = mv.split("/")[-1]
+            head = re.split(r"[^A-Za-z]", seg)[0]
+            if head and head.lower() not in STOP and len(head) >= 3:
+                add(head.lower(), rid)
+    aliases = {k: v for k, v in aliases.items() if v}   # drop ambiguous
+
+    # Explicit overrides always win (directives.aliases preferred over router.aliases).
+    rcfg = cfg.get("router") if isinstance(cfg.get("router"), dict) else {}
+    dcfg = cfg.get("directives") if isinstance(cfg.get("directives"), dict) else {}
+    for src in (rcfg.get("aliases"), dcfg.get("aliases")):
+        if isinstance(src, dict):
+            for tok, rid in src.items():
+                if isinstance(rid, str) and rid in UC_SLOT_MAP:
+                    aliases[_norm_alias(tok)] = rid
+    _ROUTE_ALIASES = aliases
+
+    planner = dcfg.get("planner") or rcfg.get("planner")
+    DIRECTIVES["planner"] = planner if planner in UC_SLOT_MAP else None
+    DIRECTIVES["strip"] = bool(dcfg.get("strip", True))
+    # Opt-in resolution: an explicit env var wins (UC_DIRECTIVES=1 on, =0 off);
+    # otherwise follow config, which defaults to OFF so a fresh upgrade is a no-op.
+    env = os.environ.get("UC_DIRECTIVES")
+    if env is not None:
+        DIRECTIVES_ENABLED = env != "0"
+    else:
+        DIRECTIVES_ENABLED = bool(dcfg.get("enabled", False))
+    if DIRECTIVES_ENABLED and aliases:
+        log("directives: %d alias(es) over %s%s"
+            % (len(aliases), ", ".join(sorted(set(aliases.values()))),
+               ("; planner=%s" % DIRECTIVES["planner"]) if DIRECTIVES["planner"] else ""))
+
+
+# --------------------------------------------------------------------------
 # UltraCode envelope (the heart of the proxy)
 # --------------------------------------------------------------------------
 
@@ -677,6 +900,27 @@ def transform_messages_body(raw: bytes):
     if TIER_LOG:
         remap = ("%s->%s" % (model_before, routed_id)) if routed_id != model_before else (model_before or "-")
         log("tier=%s model=%s" % (tier, remap))
+
+    # Routing directive ("pin"): a prompt tag forces THIS request onto a specific
+    # backend, overriding the worker/orchestrator selection above AND the Auto
+    # Router below (the pin sets a concrete model id, so the type=="auto" branch
+    # never fires). This is how an automated multi-agent workflow lands each
+    # spawned sub-agent on the right model by role. Falls back silently to normal
+    # routing when no (or an ambiguous/unknown) directive is present.
+    pin_id = _directive_pin(body)
+    if pin_id and pin_id != body.get("model"):
+        if DIRECTIVES_LOG or TIER_LOG or ROUTER_LOG:
+            log("directive pin: tier=%s %s -> %s" % (tier, body.get("model"), pin_id))
+        body["model"] = pin_id
+        changed = True
+    elif (not pin_id and DIRECTIVES.get("planner") and _is_plan_mode(body)
+          and DIRECTIVES["planner"] != body.get("model")):
+        # No explicit pin, but this is the interactive planning loop -> planner.
+        planner = DIRECTIVES["planner"]
+        if DIRECTIVES_LOG or TIER_LOG or ROUTER_LOG:
+            log("directive plan-mode: tier=%s %s -> %s" % (tier, body.get("model"), planner))
+        body["model"] = planner
+        changed = True
 
     # Auto Router: a slot of type "auto" is not a real backend -- it asks a cheap
     # classifier model to score the configured candidates and routes this request
@@ -1300,26 +1544,10 @@ def _clamp01(x):
 
 
 def _last_user_text(anth_body):
-    """Sanitized text of the latest user turn -- the task to classify."""
-    msgs = anth_body.get("messages") or []
-    for m in reversed(msgs):
-        if not isinstance(m, dict) or m.get("role") != "user":
-            continue
-        content = m.get("content")
-        # A user turn that is ONLY tool_result blocks is a tool round-trip, not a
-        # fresh ask; skip it so the cache key stays on the real instruction.
-        if isinstance(content, list):
-            non_tool = [b for b in content
-                        if not (isinstance(b, dict) and b.get("type") == "tool_result")]
-            if not non_tool:
-                continue
-            txt = _text_from_anthropic_content(non_tool)
-        else:
-            txt = content if isinstance(content, str) else _text_from_anthropic_content(content)
-        txt = (txt or "").strip()
-        if txt:
-            return txt
-    return ""
+    """Sanitized text of the latest user turn -- the task to classify. A turn that
+    is ONLY tool_result blocks is a tool round-trip, not a fresh ask, so it is
+    skipped (keeps the router cache key on the real instruction)."""
+    return _latest_user_turn(anth_body)[1]
 
 
 def _has_images(anth_body):
@@ -2233,6 +2461,7 @@ def main():
         log("  including %d stock Claude model(s) on GET /v1/models [%s] (real "
             "Claude stays visible): %s"
             % (len(stock), src, ", ".join(m["id"] for m in stock)))
+    _configure_directives(cfg)
     if UC_MODELS:
         log("  advertising %d configured model(s) on GET /v1/models:" % len(UC_MODELS))
         for m in UC_MODELS:

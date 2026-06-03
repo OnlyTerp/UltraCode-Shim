@@ -375,6 +375,69 @@ def main():
             {"role": "user", "content": [{"type": "image", "source": {}}]}]}) is True
         print("[ok] auto router unit: selection / image-reject / score-parse / signal")
 
+        # Routing directives ("pins"): a prompt tag forces one backend, overriding
+        # tier/worker selection AND the Auto Router. Aliases auto-derive from model
+        # ids + display names; ambiguous/unknown/auto markers are ignored so a
+        # request never breaks. This is how a multi-agent workflow lands each
+        # spawned sub-agent on the right model by role.
+        _saved = (up.UC_SLOT_MAP, up.UC_MODELS, dict(up._ROUTE_ALIASES), dict(up.DIRECTIVES))
+        up.UC_SLOT_MAP = {
+            "claude-opus": {"model": "claude-opus-4-8"},
+            "claude-composer": {"type": "openai_compat", "model": "cursor/composer-2.5"},
+            "claude-gpt-5.5-codex": {"type": "codex_oauth", "model": "gpt-5.5"},
+            "claude-auto": {"type": "auto"},
+        }
+        up.UC_MODELS = [
+            {"id": "claude-opus", "display_name": "Claude Opus 4.8 (real)"},
+            {"id": "claude-composer", "display_name": "Composer 2.5 (Cursor, experimental)"},
+            {"id": "claude-gpt-5.5-codex", "display_name": "GPT-5.5 (Codex OAuth)"},
+            {"id": "claude-auto", "display_name": "Auto (smart routing)"},
+        ]
+        up._configure_directives({"directives": {
+            "enabled": True,
+            "aliases": {"claude": "claude-opus", "smart": "claude-auto"},
+            "planner": "claude-opus"}})
+        # aliases auto-derive from display names/ids; explicit override wins
+        assert up._resolve_alias("composer") == "claude-composer"
+        assert up._resolve_alias("codex") == "claude-gpt-5.5-codex"
+        assert up._resolve_alias("opus") == "claude-opus"
+        assert up._resolve_alias("claude") == "claude-opus"
+
+        def _pin(text):
+            b = {"messages": [{"role": "user", "content": text}]}
+            return up._directive_pin(b), up._latest_user_turn(b)[1]
+        # sentinel / tag / natural-language tiers each resolve a single pin
+        assert _pin("[[route:codex]] review this diff") == ("claude-gpt-5.5-codex", "review this diff")
+        assert _pin("@composer implement the parser")[0] == "claude-composer"
+        assert _pin("please have codex review it")[0] == "claude-gpt-5.5-codex"   # NL fallback
+        # no marker, ambiguous (two named in one tier), unknown, or auto -> ignored
+        assert _pin("just write some code")[0] is None
+        assert _pin("@opus then @composer")[0] is None                            # ambiguous (tag)
+        assert _pin("use opus and use composer")[0] is None                       # ambiguous (NL)
+        assert _pin("[[route:doesnotexist]] hi")[0] is None                       # unknown alias
+        assert _pin("@smart do it")[0] is None                                    # resolves to auto route
+        # the pin reaches the dispatcher: a tagged worker request overrides tier
+        up._set_selection(orch="claude-opus", worker="claude-opus")
+        out, _ = up.transform_messages_body(json.dumps({
+            "model": "claude-opus-4-8", "max_tokens": 16,
+            "messages": [{"role": "user", "content": "@composer write a haiku"}]}).encode())
+        assert json.loads(out)["model"] == "cursor/composer-2.5", json.loads(out)["model"]
+        up._set_selection(orch=None, worker=None)
+        up._ACTIVE.update({"orch": None, "worker": None, "worker_explicit": False})
+        # plan-mode detection drives the optional planner auto-route
+        assert up._is_plan_mode({"tools": [{"name": "ExitPlanMode"}]}) is True
+        assert up._is_plan_mode({"tools": [{"name": "Bash"}]}) is False
+        # OPT-IN: with no enable flag and no UC_DIRECTIVES env, the feature is OFF,
+        # so pulling this change is a no-op for existing setups -- a tag is left as-is
+        # and normal routing decides. (This is the backward-compat guarantee.)
+        os.environ.pop("UC_DIRECTIVES", None)
+        up._configure_directives({"directives": {"aliases": {"composer": "claude-composer"}}})
+        assert up.DIRECTIVES_ENABLED is False
+        assert _pin("@composer do it")[0] is None
+        up.UC_SLOT_MAP, up.UC_MODELS, up._ROUTE_ALIASES, up.DIRECTIVES = (
+            _saved[0], _saved[1], _saved[2], _saved[3])
+        print("[ok] routing directives: opt-in default-off / alias-derive / sentinel+tag+NL pin / strip / ambiguous-ignore / dispatch")
+
         # issue #3: a rejected tool call (with or without a comment) must not leave
         # an assistant tool_calls message unanswered, and tool replies must come
         # BEFORE the user's text — otherwise strict backends (DeepSeek) 400 with

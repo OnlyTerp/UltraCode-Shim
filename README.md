@@ -321,6 +321,7 @@ test → troubleshoot) written for an AI to follow.
 | [docs/SETUP.md](docs/SETUP.md) | Human setup guide (Windows + macOS/Linux) |
 | [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) | The mechanism + reverse-engineering evidence |
 | [docs/AUTO_ROUTER.md](docs/AUTO_ROUTER.md) | The Auto Router — pick the right model per task automatically |
+| [docs/DIRECTIVES.md](docs/DIRECTIVES.md) | Routing directives — pin a request to a model from the prompt (per-role multi-agent workflows) |
 | [docs/ADD_A_MODEL.md](docs/ADD_A_MODEL.md) | Add any backend to the `/model` menu |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptom → cause → fix |
 

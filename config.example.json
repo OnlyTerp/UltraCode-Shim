@@ -18,6 +18,7 @@
   "_models": "What shows in Claude Code's /model picker. id MUST start with 'claude' or 'anthropic' (others are silently dropped). display_name is the label you see. 'claude-auto' is the Auto Router (see the 'router' section below): pick it and the proxy chooses the cheapest configured backend that can handle each task.",
   "models": [
     { "id": "claude-auto",              "display_name": "Auto (smart routing)" },
+    { "id": "claude-opus",              "display_name": "Claude Opus 4.8 (real)" },
     { "id": "claude-gpt-5.5-codex",     "display_name": "GPT-5.5 (Codex OAuth)" },
     { "id": "claude-minimax-m3",        "display_name": "MiniMax-M3" },
     { "id": "claude-mimo",              "display_name": "MiMo v2.5 Pro" },
@@ -36,6 +37,10 @@
     "claude-auto": {
       "_": "The Auto Router. type:auto means this is NOT a real backend - the proxy asks the cheap 'classifier' model (configured in the 'router' block below) to score the candidates and routes each task to the cheapest one that clears the quality bar. Pick 'Auto (smart routing)' in /model or the selector.",
       "type": "auto"
+    },
+    "claude-opus": {
+      "_": "Real Anthropic Claude Opus 4.8, as a first-class pick. Anthropic passthrough: no 'type' (forwards unchanged), no 'upstream' (defaults to api.anthropic.com), no 'auth' (reuses your existing Claude OAuth login - no API key needed). The id is 'claude-opus' ON PURPOSE: it must NOT be 'claude-opus-4-8', because the dynamic-workflow engine hardcodes that exact id for its background traffic and the orchestrator/worker layer remaps it onto your pick - so a route named 'claude-opus-4-8' would be ambiguous with stock traffic. A distinct id ('claude-opus') is recognized as a deliberate orchestrator/worker pick and as a routing-directive target ([[route:opus]]). The 'model' below is what's actually sent upstream. (This is also what include_stock_models can't give you on its own: real Opus as a DISTINCT orchestrator while a different/cheaper model runs the workers.)",
+      "model": "claude-opus-4-8"
     },
     "claude-gpt-5.5-codex": {
       "_": "Needs `codex login` once; no API key. effort/tier via UC_CODEX_EFFORT/UC_CODEX_SERVICE_TIER.",
@@ -152,5 +157,17 @@
         "card": "Highest cost here; frontier reasoning and agentic coding. Best for the hardest work: large multi-file refactors, subtle debugging, architecture and design, long autonomous/dynamic workflows, and anything requiring images. Reserve for tasks the cheaper models would likely fail."
       }
     ]
+  },
+
+  "_directives": "Routing directives ('pins') - optional, OPT-IN (OFF until you set enabled:true below, or UC_DIRECTIVES=1). A request's PROMPT can FORCE a specific backend, overriding the orchestrator/worker pick AND the Auto Router. This is how an automated multi-agent workflow lands each spawned sub-agent on the right model BY ROLE: tag each agent()'s prompt with [[route:NAME]] (or @NAME / use:NAME). Names auto-derive from your model ids + display names (composer/codex/minimax/mimo... already work). No tag, two names, or an unknown name -> normal routing decides. Full guide: docs/DIRECTIVES.md; runnable plan->code->review->fix pipeline: examples/role_pipeline_workflow.js.",
+  "directives": {
+    "_enabled": "OFF by default so this never changes existing behavior. Set true to turn directives on (or UC_DIRECTIVES=1).",
+    "enabled": false,
+    "_aliases": "Optional name -> route id overrides ON TOP of the auto-derived table. Right side MUST be a route id from 'routes'. Add entries only to introduce a new name or disambiguate one (e.g. bare 'deepseek' maps to two routes and is dropped unless pinned here).",
+    "aliases": {},
+    "_planner": "Optional. When set to a route id, interactive plan-mode turns with NO explicit pin auto-route there (e.g. let your strongest model write every plan). null = disabled.",
+    "planner": null,
+    "_strip": "Remove the [[route:...]] / @name / use:name marker from the prompt before forwarding (recommended).",
+    "strip": true
   }
 }
