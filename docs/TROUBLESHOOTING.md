@@ -262,6 +262,34 @@ side — here, all on Windows). The cleanest way to make any model follow the ru
 above automatically is to drop them into a `CLAUDE.md` (project root, or the global
 `~/.claude/CLAUDE.md`).
 
+### Context fills up too fast / `/context` shows `200k` for a 1M model
+
+**Symptom.** You picked Opus 4.8 (or Sonnet 4.6) — models with a 1M context
+window — but the status-line meter climbs ~5× faster than expected and pins at
+100%, auto-compaction fires early or not at all, and `/context` shows the limit
+as `… / 200k` instead of `/ 1M`.
+
+**Cause.** Claude Code only switches its context meter **and** auto-compaction to
+the 1M window (and sends the `context-1m` beta) when the session's model id
+carries the **`[1m]`** suffix (e.g. `claude-opus-4-8[1m]`). The selector and
+`config.json` advertise *bare* ids (`claude-opus-4-8`), so the client defaults to
+the 200k window even though Opus 4.8 / Opus 4.7 / Opus 4.6 / Sonnet 4.6 serve 1M
+natively on the Anthropic API. Nothing is actually lost upstream — the window is
+just mis-sized in the client.
+
+**Fix.** The launcher now appends `[1m]` automatically when the chosen
+orchestrator is a 1M-capable Claude model. Relaunch, pick the model, and confirm
+`/context` reads `/ 1M`.
+
+- **Disable it** (back to bare ids): set `UC_FORCE_1M=0`.
+- **Change the capable set:** set `UC_1M_MODELS` to a comma-separated list of base
+  ids (default `claude-opus-4-8,claude-opus-4-7,claude-opus-4-6,claude-sonnet-4-6`).
+- **Not affected:** Haiku 4.5 (200k only), `claude-auto`, and non-Claude routes
+  (Gemini / GPT / Composer) are never given a `[1m]` suffix.
+- **Caveat:** if your Anthropic-passthrough hop can fall back to a backend that
+  only supports 200k, a conversation that grows past 200k may then fail there —
+  make sure that fallback also honors 1M.
+
 ### Did I break my normal Claude Code?
 
 No — this project never edits your global `~/.claude` config or credentials; it

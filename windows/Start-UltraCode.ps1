@@ -84,9 +84,31 @@ $StateDir = Join-Path $env:LOCALAPPDATA "UltraCode-Shim"
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 $Settings = Join-Path $StateDir "ultracode_settings.json"
 $BaseUrl  = "http://127.0.0.1:$Port"
+
+# 1M context window enablement: Claude Code only switches its context meter AND
+# auto-compaction to the 1M window (and sends the context-1m beta) when the model
+# id carries the [1m] suffix. The selector/config advertise bare ids (e.g.
+# claude-opus-4-8), so without this the client sizes context at 200k -- the meter
+# fills ~5x too fast and pins at 100% -- even though Opus 4.8 / Sonnet 4.6 serve
+# 1M natively. We append [1m] to 1M-capable Claude base ids before launch.
+# Disable with UC_FORCE_1M=0; override the capable set with UC_1M_MODELS.
+function Add-Uc1m {
+    param([string]$ModelId)
+    if ($env:UC_FORCE_1M -eq "0") { return $ModelId }
+    if ([string]::IsNullOrEmpty($ModelId)) { return $ModelId }
+    if ($ModelId.Contains("[1m]")) { return $ModelId }
+    $set = if ($env:UC_1M_MODELS) { $env:UC_1M_MODELS }
+           else { "claude-opus-4-8,claude-opus-4-7,claude-opus-4-6,claude-sonnet-4-6" }
+    foreach ($id in $set.Split(",")) {
+        if ($ModelId -eq $id.Trim()) { return "${ModelId}[1m]" }
+    }
+    return $ModelId
+}
+$DefaultModel = Add-Uc1m "claude-opus-4-8"
+
 @{
     ultracode = $true
-    model     = "claude-opus-4-8"
+    model     = $DefaultModel
     env       = @{
         ANTHROPIC_BASE_URL                         = $BaseUrl
         CLAUDE_CODE_WORKFLOWS                       = "1"
@@ -231,6 +253,10 @@ if (($env:UC_SELECTOR -ne "0") -and (Test-Path $Selector)) {
         Write-Host "Selector unavailable; launching with default model: $_" -ForegroundColor Yellow
         $SelectedModel = ""
     }
+    # Upgrade a 1M-capable Claude pick to its [1m] variant so the client uses the
+    # full 1M context window (meter + auto-compaction), not the 200k default.
+    $SelectedModel = Add-Uc1m $SelectedModel
+    if ($SelectedModel) { Write-Host "Orchestrator model id: $SelectedModel" -ForegroundColor Green }
 }
 
 $HasModelArg = $false
