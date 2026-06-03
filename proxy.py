@@ -666,6 +666,18 @@ def transform_messages_body(raw: bytes):
     model_before = body.get("model")
     route = {}
 
+    # 1M context window: Claude Code appends a "[1m]" suffix to a model id to ask
+    # the client for the 1M window (it also sends the context-1m beta header; see
+    # the launchers' UC_FORCE_1M / [1m] handling). That suffix is a client-side
+    # convention, not an Anthropic model id, so it must not reach routing (it would
+    # not match a configured route or an orchestrator/worker pick) or the upstream.
+    # Strip it up front so "<id>[1m]" behaves exactly like "<id>" everywhere below;
+    # the 1M window is unaffected because it rides the beta header, left untouched.
+    if isinstance(model_before, str) and model_before.endswith("[1m]"):
+        model_before = model_before[:-len("[1m]")]
+        body["model"] = model_before
+        changed = True
+
     # Orchestrator/Worker: classify tier and remap the model id to the selected
     # orchestrator (heavy) or worker (fast) model. This also captures the dynamic
     # workflow's stock-model background traffic so it follows your pick.

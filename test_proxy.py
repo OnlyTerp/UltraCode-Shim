@@ -263,6 +263,21 @@ def main():
         assert up._expand_env("Bearer ${MOCK_KEY}") == "Bearer secret123"
         print("[ok] ${ENV} expansion in route auth")
 
+        # PR #8 companion: Claude Code's [1m] context-window suffix on the model id
+        # is stripped before routing, so "<id>[1m]" still matches "<id>"'s route
+        # (the 1M window itself rides the context-1m beta header, not the id). A
+        # naive exact-match lookup would otherwise miss the route once the launcher
+        # appends [1m] to a 1M-capable Claude pick.
+        _saved_slots = up.UC_SLOT_MAP
+        up.UC_SLOT_MAP = {"claude-big": {"type": "openai_compat", "model": "big-real",
+                                         "upstream": mock + "/v1", "auth": "Bearer ${MOCK_KEY}"}}
+        out_1m, _ = up.transform_messages_body(json.dumps({
+            "model": "claude-big[1m]", "max_tokens": 8,
+            "messages": [{"role": "user", "content": "hi"}]}).encode())
+        assert json.loads(out_1m)["model"] == "big-real", json.loads(out_1m)["model"]
+        up.UC_SLOT_MAP = _saved_slots
+        print("[ok] 1M [1m] window suffix stripped before routing")
+
         # Stock Claude models: the built-in fallback so real Claude stays in
         # /model even with no upstream list. Toggle + override are honored, and
         # every advertised id obeys Claude Code's /^(claude|anthropic)/i rule.
