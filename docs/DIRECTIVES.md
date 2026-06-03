@@ -31,7 +31,13 @@ scans for a marker, most-explicit tier first. A tier wins only if it resolves to
 |------|------|---------|------------------------------|
 | 1. Sentinel | `[[route:NAME]]` | `[[route:codex]] review this diff` | yes |
 | 2. Tag | `@NAME` · `use:NAME` · `route:NAME` · `model:NAME` | `@composer implement the parser` | yes |
-| 3. Natural language | `use/have/ask/let/with/via NAME` | `please have codex review it` | no (it's prose) |
+| 3. Natural language **(opt-in, off by default)** | `use/have/ask/let/with/via NAME` | `please have codex review it` | no (it's prose) |
+
+> The natural-language tier is **off by default** — enable it with
+> `UC_DIRECTIVES_NL=1`. It's deliberately opt-in because ordinary prose that merely
+> mentions a model name after a trigger word (e.g. "*does this work **with Claude**?*")
+> would otherwise silently reroute the request. With it off, only the explicit
+> sentinel/tag forms pin.
 
 `NAME` is resolved through an **alias table** (below). If it resolves to one
 backend, that request is pinned there — skipping both the worker/orchestrator pick
@@ -60,15 +66,18 @@ obvious ones already work with no setup:
 |----------|--------------------------------------|
 | `opus`, `claude` | `claude-opus` |
 | `composer` | `claude-composer` |
-| `codex`, `gpt` | `claude-gpt-5.5-codex` |
+| `codex` | `claude-gpt-5.5-codex` |
 | `minimax` | `claude-minimax-m3` |
 | `mimo` | `claude-mimo` |
 | `deepseek-v4-pro`, `deepseek-v4-flash` | the matching route |
 
 Matching is case- and punctuation-insensitive (`GPT-5.5`, `gpt5.5`, `gpt_5_5` all
-collapse to the same key). A name that would map to **two** routes (e.g. bare
-`deepseek`) is dropped as ambiguous — use the specific id, or pin it explicitly in
-config.
+collapse to the same key). A name that would map to **two** routes is dropped as
+ambiguous — use the specific id, or pin it explicitly in `aliases`. In the shipped
+example two such names are dropped: bare **`deepseek`** (matches both v4-pro and
+v4-flash) and **`gpt`** (matches both `claude-gpt-5.5-codex` via `gpt-5.5` *and*
+`claude-ollama-cloud` via its `gpt-oss` model) — so use `codex` for GPT-5.5, not
+`gpt`.
 
 ### Configure it (optional)
 
@@ -103,7 +112,7 @@ The `directives` block in `config.json` (already present in the shipped config):
 | Env var | Default | Effect |
 |---------|---------|--------|
 | `UC_DIRECTIVES` | unset | `1` force-enables, `0` force-disables — overrides `directives.enabled`. Unset → follow config (default off). |
-| `UC_DIRECTIVES_NL` | `1` | `0` disables the natural-language tier; only sentinel/tag pins count. |
+| `UC_DIRECTIVES_NL` | `0` | `1` enables the natural-language tier. **Off by default** (avoids prose like "with Claude" silently rerouting); only sentinel/tag pins count unless enabled. |
 | `UC_DIRECTIVES_LOG` | `0` | `1` logs every pin / ambiguity / ignore decision. |
 
 ---

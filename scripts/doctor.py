@@ -237,6 +237,28 @@ def main():
         else:
             note("router: no classifier set - router will pick the cheapest candidate without scoring")
 
+    # 6b. routing directives (pins): validate alias overrides + planner when set
+    directives = cfg.get("directives") if isinstance(cfg.get("directives"), dict) else {}
+    if directives:
+        if directives.get("enabled"):
+            al = directives.get("aliases") if isinstance(directives.get("aliases"), dict) else {}
+            bad = [v for v in al.values() if not (isinstance(v, str) and v in routes)]
+            if bad:
+                (note if using_example else fail)(
+                    "directives: alias override(s) point to missing route(s): %s" % ", ".join(map(str, bad)))
+            elif al:
+                ok("directives: %d alias override(s) map to real routes" % len(al))
+            planner = directives.get("planner")
+            if not planner:
+                ok("directives: enabled (no planner)")
+            elif planner in routes:
+                ok("directives: planner '%s' is a configured route" % planner)
+            else:
+                (note if using_example else fail)(
+                    "directives: planner '%s' has no matching route - it will be ignored" % planner)
+        else:
+            ok("directives: present but disabled (no-op)")
+
     # 7. port free
     proxy_cfg = cfg.get("proxy") if isinstance(cfg.get("proxy"), dict) else {}
     port = int(os.environ.get("UC_LISTEN_PORT") or proxy_cfg.get("listen_port") or 8141)

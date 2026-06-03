@@ -141,7 +141,7 @@ ROUTER_LOG = os.environ.get("UC_ROUTER_LOG", "0") == "1"
 # existing setup that hasn't asked for it. Final value is resolved in
 # _configure_directives(); this is only the pre-config default. See docs/DIRECTIVES.md.
 DIRECTIVES_ENABLED = os.environ.get("UC_DIRECTIVES") == "1"
-DIRECTIVES_NL = os.environ.get("UC_DIRECTIVES_NL", "1") != "0"   # natural-language fallback
+DIRECTIVES_NL = os.environ.get("UC_DIRECTIVES_NL", "0") == "1"   # natural-language tier: opt-in (off by default)
 DIRECTIVES_LOG = os.environ.get("UC_DIRECTIVES_LOG", "0") == "1"
 DIRECTIVES = {"planner": None, "strip": True}   # filled from config in main()
 _ROUTE_ALIASES = {}                              # normalized token -> concrete route id
@@ -649,7 +649,7 @@ def _wire_orchestrator_worker():
 # overrides). A pin to an unconfigured or "auto" route is ignored so a request is
 # never broken.
 _DIRECTIVE_SENTINEL = re.compile(r"\[\[\s*(?:route|model|use)\s*:\s*([A-Za-z0-9._\-]+)\s*\]\]", re.I)
-_DIRECTIVE_TAG = re.compile(r"(?:^|[\s(])(?:@|(?:route|model|use)\s*:\s*)([A-Za-z0-9._\-]+)", re.I)
+_DIRECTIVE_TAG = re.compile(r"(?<![^\s(])(?:@|(?:route|model|use)\s*:\s*)([A-Za-z0-9._\-]+)", re.I)
 _DIRECTIVE_NL = re.compile(r"\b(?:use|using|have|ask|let|route\s+to|via|with)\s+([A-Za-z0-9._\-]+)", re.I)
 
 
@@ -719,9 +719,12 @@ def _strip_spans_in_msg(msg, spans):
     if not spans or not isinstance(msg, dict):
         return
     def clean(s):
+        # Remove the marker itself; do NOT globally collapse whitespace -- that
+        # would flatten indentation in any code the prompt carries. Only tidy
+        # trailing spaces left on a line and trim the ends.
         for sp in spans:
-            s = s.replace(sp, " ")
-        return re.sub(r"[ \t]{2,}", " ", s).strip()
+            s = s.replace(sp, "")
+        return re.sub(r"[ \t]+(\n|$)", r"\1", s).strip()
     content = msg.get("content")
     if isinstance(content, str):
         msg["content"] = clean(content)
@@ -913,9 +916,11 @@ def transform_messages_body(raw: bytes):
             log("directive pin: tier=%s %s -> %s" % (tier, body.get("model"), pin_id))
         body["model"] = pin_id
         changed = True
-    elif (not pin_id and DIRECTIVES.get("planner") and _is_plan_mode(body)
-          and DIRECTIVES["planner"] != body.get("model")):
+    elif (DIRECTIVES_ENABLED and not pin_id and DIRECTIVES.get("planner")
+          and _is_plan_mode(body) and DIRECTIVES["planner"] != body.get("model")):
         # No explicit pin, but this is the interactive planning loop -> planner.
+        # Gated on DIRECTIVES_ENABLED so "enabled:false" / UC_DIRECTIVES=0 is a
+        # true hard-off (the planner is otherwise applied independently of pins).
         planner = DIRECTIVES["planner"]
         if DIRECTIVES_LOG or TIER_LOG or ROUTER_LOG:
             log("directive plan-mode: tier=%s %s -> %s" % (tier, body.get("model"), planner))

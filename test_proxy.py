@@ -406,16 +406,31 @@ def main():
         def _pin(text):
             b = {"messages": [{"role": "user", "content": text}]}
             return up._directive_pin(b), up._latest_user_turn(b)[1]
-        # sentinel / tag / natural-language tiers each resolve a single pin
+        # sentinel + tag tiers resolve a single pin and strip the marker cleanly
         assert _pin("[[route:codex]] review this diff") == ("claude-gpt-5.5-codex", "review this diff")
         assert _pin("@composer implement the parser")[0] == "claude-composer"
-        assert _pin("please have codex review it")[0] == "claude-gpt-5.5-codex"   # NL fallback
+        # strip is SURGICAL: a leading "(" is preserved (not swallowed), and code
+        # indentation is NOT flattened (regression test for the marker-strip bug)
+        pin_id, txt = _pin("Document the literal token (@composer) exactly.")
+        assert pin_id == "claude-composer" and txt == "Document the literal token () exactly.", (pin_id, txt)
+        _, code_txt = _pin("[[route:composer]] code:\ndef f():\n    if x:\n        return 1")
+        assert code_txt == "code:\ndef f():\n    if x:\n        return 1", repr(code_txt)
         # no marker, ambiguous (two named in one tier), unknown, or auto -> ignored
         assert _pin("just write some code")[0] is None
         assert _pin("@opus then @composer")[0] is None                            # ambiguous (tag)
-        assert _pin("use opus and use composer")[0] is None                       # ambiguous (NL)
         assert _pin("[[route:doesnotexist]] hi")[0] is None                       # unknown alias
         assert _pin("@smart do it")[0] is None                                    # resolves to auto route
+        # natural-language tier is OPT-IN (off by default) -- ordinary prose like
+        # "have codex review it" must NOT pin until UC_DIRECTIVES_NL is on; this is
+        # the fix for the "with Claude"-style false-routing footgun
+        assert up.DIRECTIVES_NL is False
+        assert _pin("please have codex review it")[0] is None                     # NL off -> no pin
+        up.DIRECTIVES_NL = True
+        try:
+            assert _pin("please have codex review it")[0] == "claude-gpt-5.5-codex"
+            assert _pin("use opus and use composer")[0] is None                   # ambiguous (NL)
+        finally:
+            up.DIRECTIVES_NL = False
         # the pin reaches the dispatcher: a tagged worker request overrides tier
         up._set_selection(orch="claude-opus", worker="claude-opus")
         out, _ = up.transform_messages_body(json.dumps({
@@ -427,6 +442,25 @@ def main():
         # plan-mode detection drives the optional planner auto-route
         assert up._is_plan_mode({"tools": [{"name": "ExitPlanMode"}]}) is True
         assert up._is_plan_mode({"tools": [{"name": "Bash"}]}) is False
+        # a name that maps to TWO routes (gpt-5.5 head AND a gpt-oss model head) is
+        # dropped as ambiguous -> resolves to nothing (regression for the docs/gpt gap)
+        _slots0, _models0 = up.UC_SLOT_MAP, up.UC_MODELS
+        up.UC_SLOT_MAP = {"claude-gpt-5.5-codex": {"type": "codex_oauth", "model": "gpt-5.5"},
+                          "claude-ollama": {"type": "openai_compat", "model": "gpt-oss:120b"}}
+        up.UC_MODELS = [{"id": "claude-gpt-5.5-codex", "display_name": "GPT-5.5 (Codex OAuth)"},
+                        {"id": "claude-ollama", "display_name": "Ollama Cloud"}]
+        up._configure_directives({"directives": {"enabled": True}})
+        assert up._resolve_alias("gpt") is None, up._resolve_alias("gpt")        # ambiguous -> dropped
+        assert up._resolve_alias("codex") == "claude-gpt-5.5-codex"              # unique -> resolves
+        up.UC_SLOT_MAP, up.UC_MODELS = _slots0, _models0
+        # FIX: the planner must NOT fire when directives are disabled (hard-off).
+        up._configure_directives({"directives": {"enabled": False, "planner": "claude-opus"}})
+        assert up.DIRECTIVES_ENABLED is False and up.DIRECTIVES["planner"] == "claude-opus"
+        out_pm, _ = up.transform_messages_body(json.dumps({
+            "model": "claude-composer", "max_tokens": 16,
+            "tools": [{"name": "ExitPlanMode"}],
+            "messages": [{"role": "user", "content": "make a plan"}]}).encode())
+        assert json.loads(out_pm)["model"] == "cursor/composer-2.5", json.loads(out_pm)["model"]
         # OPT-IN: with no enable flag and no UC_DIRECTIVES env, the feature is OFF,
         # so pulling this change is a no-op for existing setups -- a tag is left as-is
         # and normal routing decides. (This is the backward-compat guarantee.)
@@ -436,7 +470,7 @@ def main():
         assert _pin("@composer do it")[0] is None
         up.UC_SLOT_MAP, up.UC_MODELS, up._ROUTE_ALIASES, up.DIRECTIVES = (
             _saved[0], _saved[1], _saved[2], _saved[3])
-        print("[ok] routing directives: opt-in default-off / alias-derive / sentinel+tag+NL pin / strip / ambiguous-ignore / dispatch")
+        print("[ok] routing directives: opt-in default-off / NL opt-in / surgical strip / planner-gated / gpt-collision / dispatch")
 
         # issue #3: a rejected tool call (with or without a comment) must not leave
         # an assistant tool_calls message unanswered, and tool replies must come
