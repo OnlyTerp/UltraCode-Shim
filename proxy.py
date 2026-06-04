@@ -64,6 +64,10 @@ ENV KNOBS
   UC_MODEL_MAP       optional JSON, e.g. {"claude-opus-4-8":"my-model"}
   UC_LOG             optional log file path (default stderr)
   UC_VERBOSE         default 0
+  UC_BROWSER_UA      User-Agent for openai_compat upstreams (default: modern
+                     Chrome UA). Fixes CF 403 "browser_signature_banned" on
+                     providers like crof.ai (same keys work in droid/factory).
+                     Override with env or per-route "headers".
 
 ROUTE SHAPE (config.json "routes" object)
 -----------------------------------------
@@ -145,6 +149,15 @@ DIRECTIVES_NL = os.environ.get("UC_DIRECTIVES_NL", "0") == "1"   # natural-langu
 DIRECTIVES_LOG = os.environ.get("UC_DIRECTIVES_LOG", "0") == "1"
 DIRECTIVES = {"planner": None, "strip": True}   # filled from config in main()
 _ROUTE_ALIASES = {}                              # normalized token -> concrete route id
+
+# BROWSER_UA: browser UA for openai_compat (and classifier) calls.
+# CF-protected providers (e.g. crof.ai) ban Python-urllib (error 1010
+# "browser_signature_banned"). Matches droid/factory clients.
+# Override: UC_BROWSER_UA=... or route "headers".
+BROWSER_UA = os.environ.get(
+    "UC_BROWSER_UA",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
 
 try:
     UC_MODEL_MAP = json.loads(os.environ.get("UC_MODEL_MAP", "") or "{}")
@@ -1694,7 +1707,8 @@ def _classifier_complete(slot, system_prompt, user_content, timeout):
                 payload[bk] = _expand_env(bv) if isinstance(bv, str) else bv
         data = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json", "Accept": "application/json",
-                   "Content-Length": str(len(data))}
+                   "Content-Length": str(len(data)), "User-Agent": BROWSER_UA,
+                   "Accept-Language": "en-US,en;q=0.9"}
         auth = slot.get("auth")
         if auth and auth != "passthrough":
             Handler._apply_auth_header(headers, auth)
@@ -1715,7 +1729,7 @@ def _classifier_complete(slot, system_prompt, user_content, timeout):
                "messages": [{"role": "user", "content": user_content}]}
     data = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json", "Content-Length": str(len(data)),
-               "anthropic-version": "2023-06-01"}
+               "anthropic-version": "2023-06-01", "User-Agent": BROWSER_UA}
     auth = slot.get("auth")
     if auth and auth != "passthrough":
         Handler._apply_auth_header(headers, auth)
@@ -1999,6 +2013,7 @@ class Handler(BaseHTTPRequestHandler):
         fwd_headers = {k: v for k, v in self.headers.items()
                        if k.lower() not in _HOP_BY_HOP}
         fwd_headers["Accept-Encoding"] = "identity"
+        fwd_headers.setdefault("User-Agent", BROWSER_UA)
         url = UPSTREAM + self.path
         base = {"data": [], "has_more": False, "first_id": None, "last_id": None}
         try:
@@ -2083,6 +2098,7 @@ class Handler(BaseHTTPRequestHandler):
         for hk, hv in (route.get("headers") or {}).items():
             fwd_headers[hk] = hv
         fwd_headers["Accept-Encoding"] = "identity"
+        fwd_headers.setdefault("User-Agent", BROWSER_UA)
         if body:
             fwd_headers["Content-Length"] = str(len(body))
         req = urllib.request.Request(url, data=body or None,
@@ -2140,6 +2156,8 @@ class Handler(BaseHTTPRequestHandler):
             "Content-Type": "application/json",
             "Accept": "text/event-stream" if want_stream else "application/json",
             "Content-Length": str(len(payload)),
+            "User-Agent": BROWSER_UA,
+            "Accept-Language": "en-US,en;q=0.9",
         }
         auth_override = route.get("auth")
         if auth_override and auth_override != "passthrough":
