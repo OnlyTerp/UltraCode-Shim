@@ -70,6 +70,21 @@ llama.cpp / LM Studio server, etc. Tool calls are translated both ways.
 }
 ```
 
+[Requesty](https://requesty.ai) is another OpenAI-compatible gateway — same
+shape, just a different `upstream` and `provider/model` naming
+([docs](https://docs.requesty.ai), keys at
+[app.requesty.ai/api-keys](https://app.requesty.ai/api-keys)):
+
+```json
+"claude-requesty": {
+  "type": "openai_compat",
+  "upstream": "https://router.requesty.ai/v1",
+  "model": "openai/gpt-4o-mini",
+  "auth": "Bearer ${REQUESTY_API_KEY}"
+}
+```
+
+
 - `upstream` is the OpenAI **base URL exactly as the provider documents it**
   (usually ends in `/v1`). The proxy appends `/chat/completions`.
 - `model` is the backend's real model id, **not** the `claude-…` alias.
@@ -204,6 +219,7 @@ plan/key for and delete the rest:
 | Ollama Cloud | `claude-ollama-cloud` | `openai_compat` | Ollama Cloud |
 | DeepSeek V4 Pro (OpenCode Go) | `claude-opencode` | `openai_compat` | OpenCode Zen (Go subscription) |
 | Llama 3.3 70B (OpenRouter) | `claude-openrouter` | `openai_compat` | OpenRouter |
+| GPT-4o mini (Requesty) | `claude-requesty` | `openai_compat` | Requesty |
 | Local model | `claude-local` | `openai_compat` | local server |
 | Composer 2.5 (experimental) | `claude-composer` | `cursor_agent` | cursor-agent |
 | Auto (smart routing) | `claude-auto` | `auto` | picks among your backends per task |

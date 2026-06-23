@@ -28,6 +28,7 @@
     { "id": "claude-ollama-cloud",      "display_name": "Ollama Cloud" },
     { "id": "claude-opencode",          "display_name": "DeepSeek V4 Pro (OpenCode Go)" },
     { "id": "claude-openrouter",        "display_name": "Llama 3.3 70B (OpenRouter)" },
+    { "id": "claude-requesty",          "display_name": "GPT-4o mini (Requesty)" },
     { "id": "claude-local",             "display_name": "Local model" },
     { "id": "claude-composer",          "display_name": "Composer 2.5 (Cursor, experimental)" }
   ],
@@ -102,6 +103,13 @@
       "upstream": "https://openrouter.ai/api/v1",
       "model": "meta-llama/llama-3.3-70b-instruct",
       "auth": "Bearer REPLACE_WITH_YOUR_OPENROUTER_KEY"
+    },
+    "claude-requesty": {
+      "_": "Requesty (https://requesty.ai) - an OpenAI-compatible LLM gateway. Models use provider/model naming (e.g. openai/gpt-4o-mini); swap model for any slug Requesty lists. Get a key at https://app.requesty.ai/api-keys.",
+      "type": "openai_compat",
+      "upstream": "https://router.requesty.ai/v1",
+      "model": "openai/gpt-4o-mini",
+      "auth": "Bearer ${REQUESTY_API_KEY}"
     },
     "claude-local": {
       "_": "A local OpenAI-compatible server (Ollama :11434, llama.cpp :8080, LM Studio :1234). The key is usually ignored.",
