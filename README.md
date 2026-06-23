@@ -20,7 +20,7 @@ left untouched.
 
 The example config ships ready-to-use entries for **GPT‑5.5 (Codex login)**,
 **MiniMax‑M3**, **MiMo v2.5 Pro**, **DeepSeek V4 Pro/Flash**, **Step Flash**,
-**Ollama Cloud**, **OpenCode Go**, **OpenRouter**, and **local models** — keep
+**Ollama Cloud**, **OpenCode Go**, **OpenRouter**, **Requesty**, and **local models** — keep
 the ones you have a plan for, delete the rest. (Cursor's Composer needs the
 `cursor-agent` CLI and isn't HTTP-based — see
 [docs/ADD_A_MODEL.md](docs/ADD_A_MODEL.md).)
@@ -283,12 +283,16 @@ Example — MiMo and an OpenRouter model:
 Put your key right in `config.json` (it's gitignored) or use `${ENV_VAR}` and
 export it — or drop keys into a gitignored `ultracode.env` the launchers load.
 
+[Requesty](https://requesty.ai) works the same way — another `openai_compat`
+gateway with `upstream` `https://router.requesty.ai/v1`, `provider/model` naming
+(e.g. `openai/gpt-4o-mini`), and `auth` `Bearer ${REQUESTY_API_KEY}`.
+
 Route types:
 
 | `type`          | Use for                                            | Needs |
 |-----------------|----------------------------------------------------|-------|
 | *(omit)*        | Real Claude or any Anthropic-compatible endpoint   | nothing, or `auth`/`upstream` |
-| `openai_compat` | MiMo, DeepSeek, OpenRouter, OpenAI, Ollama, local llama.cpp — anything that speaks OpenAI Chat Completions (tools included) | an API key |
+| `openai_compat` | MiMo, DeepSeek, OpenRouter, Requesty, OpenAI, Ollama, local llama.cpp — anything that speaks OpenAI Chat Completions (tools included) | an API key |
 | `codex_oauth`   | GPT‑5.5 via a ChatGPT/Codex login (no API key)     | `codex login` once |
 | `cursor_agent`  | Cursor Composer (experimental)                     | `cursor-agent login` |
 | `auto`          | The [Auto Router](docs/AUTO_ROUTER.md) — score candidates per task and route to the cheapest that's good enough | a `router` block + a classifier model |
