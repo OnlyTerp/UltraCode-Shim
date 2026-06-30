@@ -1932,9 +1932,12 @@ def _classifier_complete(slot, system_prompt, user_content, timeout):
             headers[hk] = hv
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         resp = urllib.request.urlopen(req, timeout=timeout)
-        obj = json.loads(resp.read().decode("utf-8"))
-        msg = ((obj.get("choices") or [{}])[0].get("message") or {})
-        return msg.get("content") or ""
+        try:
+            obj = json.loads(resp.read().decode("utf-8"))
+            msg = ((obj.get("choices") or [{}])[0].get("message") or {})
+            return msg.get("content") or ""
+        finally:
+            resp.close()
 
     # Anthropic passthrough (real Claude or any Anthropic-compatible endpoint).
     url = (slot.get("upstream") or UPSTREAM).rstrip("/") + "/v1/messages"
@@ -1951,8 +1954,11 @@ def _classifier_complete(slot, system_prompt, user_content, timeout):
         headers[hk] = hv
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     resp = urllib.request.urlopen(req, timeout=timeout)
-    obj = json.loads(resp.read().decode("utf-8"))
-    return _text_from_anthropic_content(obj.get("content"))
+    try:
+        obj = json.loads(resp.read().decode("utf-8"))
+        return _text_from_anthropic_content(obj.get("content"))
+    finally:
+        resp.close()
 
 
 def _parse_scores(text, candidate_ids):
@@ -2264,15 +2270,18 @@ class Handler(BaseHTTPRequestHandler):
         try:
             req = urllib.request.Request(url, headers=fwd_headers, method="GET")
             resp = urllib.request.urlopen(req, timeout=30)
-            parsed = json.loads(resp.read().decode("utf-8"))
-            if isinstance(parsed, dict) and isinstance(parsed.get("data"), list):
-                base = parsed
-                # Learn the current real-Claude ids from this successful fetch and
-                # cache them, so a newly released Opus is remembered for next time
-                # (even when upstream is later unreachable). Recompute stock after
-                # learning so any new id also lands in THIS response.
-                _learn_stock_from_upstream(base["data"])
-                stock = _stock_models()
+            try:
+                parsed = json.loads(resp.read().decode("utf-8"))
+                if isinstance(parsed, dict) and isinstance(parsed.get("data"), list):
+                    base = parsed
+                    # Learn the current real-Claude ids from this successful fetch and
+                    # cache them, so a newly released Opus is remembered for next time
+                    # (even when upstream is later unreachable). Recompute stock after
+                    # learning so any new id also lands in THIS response.
+                    _learn_stock_from_upstream(base["data"])
+                    stock = _stock_models()
+            finally:
+                resp.close()
         except Exception as e:
             # No usable upstream list (e.g. no Anthropic credential to forward,
             # or an offline blip). We still serve stock + custom below, so real
@@ -2451,26 +2460,34 @@ class Handler(BaseHTTPRequestHandler):
 
         def _mk_events():
             req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+            resp = None
             try:
-                resp = urllib.request.urlopen(req, timeout=600)
-            except urllib.error.HTTPError as e:
-                detail = ""
                 try:
-                    detail = e.read().decode("utf-8", "replace")[:800]
-                except Exception:
-                    pass
-                hint = _context_length_hint(detail)
-                log("openai_compat upstream HTTP %s for %s: %s" % (e.code, url, detail))
-                yield {"type": "error", "status": e.code,
-                       "message": "openai_compat upstream %s: %s%s"
-                       % (e.code, detail, hint)}
-                return
-            except Exception as e:
-                log("openai_compat upstream error %s for %s" % (e, url))
-                yield {"type": "error", "status": 502,
-                       "message": "openai_compat upstream error: %s" % e}
-                return
-            yield from _oai_response_to_events(resp)
+                    resp = urllib.request.urlopen(req, timeout=600)
+                except urllib.error.HTTPError as e:
+                    detail = ""
+                    try:
+                        detail = e.read().decode("utf-8", "replace")[:800]
+                    except Exception:
+                        pass
+                    hint = _context_length_hint(detail)
+                    log("openai_compat upstream HTTP %s for %s: %s" % (e.code, url, detail))
+                    yield {"type": "error", "status": e.code,
+                           "message": "openai_compat upstream %s: %s%s"
+                           % (e.code, detail, hint)}
+                    return
+                except Exception as e:
+                    log("openai_compat upstream error %s for %s" % (e, url))
+                    yield {"type": "error", "status": 502,
+                           "message": "openai_compat upstream error: %s" % e}
+                    return
+                yield from _oai_response_to_events(resp)
+            finally:
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
 
         events = _events_with_retry(_mk_events, label="openai_compat %s" % model_id)
         if want_stream:
@@ -2690,33 +2707,39 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- low-level response helpers -------------------------------------
     def _relay_response(self, resp, streaming: bool):
-        status = getattr(resp, "status", None) or resp.getcode()
-        self.send_response(status)
-        for k, v in resp.headers.items():
-            kl = k.lower()
-            if kl in _HOP_BY_HOP or kl in ("content-length", "content-encoding"):
-                continue
-            self.send_header(k, v)
-        if streaming:
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.close_connection = True
-            self.send_header("Connection", "close")
-            self.end_headers()
+        try:
+            status = getattr(resp, "status", None) or resp.getcode()
+            self.send_response(status)
+            for k, v in resp.headers.items():
+                kl = k.lower()
+                if kl in _HOP_BY_HOP or kl in ("content-length", "content-encoding"):
+                    continue
+                self.send_header(k, v)
+            if streaming:
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.close_connection = True
+                self.send_header("Connection", "close")
+                self.end_headers()
+                try:
+                    while True:
+                        chunk = resp.read(8192)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except Exception as e:
+                    vlog("stream relay ended: %s" % e)
+            else:
+                data = resp.read()
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+        finally:
             try:
-                while True:
-                    chunk = resp.read(8192)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
-            except Exception as e:
-                vlog("stream relay ended: %s" % e)
-        else:
-            data = resp.read()
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+                resp.close()
+            except Exception:
+                pass
 
     def _send_error(self, status: int, message: str):
         body = json.dumps({"type": "error",
