@@ -286,6 +286,13 @@ try:
 except Exception:
     UC_MODEL_MAP = {}
 
+# Ensure sibling modules (providers/*.py) are importable even when the
+# interpreter's default sys.path[0] does not point here (e.g. zipped/embedded
+# Python builds). This is a no-op when the script dir is already on sys.path.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 # Optional Codex/ChatGPT OAuth helper (only needed for "codex_oauth" routes).
 try:
     from providers import codex_oauth as _codex_oauth  # type: ignore
