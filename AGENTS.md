@@ -63,6 +63,10 @@ Ask the user which of these they have (only configure those):
   OpenRouter, OpenAI, Ollama, a local llama.cpp/LM Studio server, etc.) → use
   `openai_compat`.
 - A **ChatGPT/Codex login** for GPT‑5.5 → use `codex_oauth` (run `codex login`).
+- A **Grok subscription** (SuperGrok / X Premium+) with the official Grok CLI →
+  use `grok_build` (run `grok login --oauth`, or `grok login --device-auth` on a
+  headless box). No API key: the proxy reads `~/.grok/auth.json`, refreshes the
+  token itself, and calls `https://api.x.ai/v1`. See `docs/ADD_A_MODEL.md`.
 - Just **Claude** → they can still use it, routed as Anthropic passthrough. No
   savings, but UltraCode works. **You don't need to configure real Claude at
   all:** the proxy always advertises the stock Claude models (Opus/Sonnet/Haiku)

@@ -2165,6 +2165,7 @@ class Handler(BaseHTTPRequestHandler):
                 "max_tokens_floor": MAX_TOKENS_FLOOR,
                 "inject_reminder": INJECT_REMINDER,
                 "codex_helper": _codex_oauth is not None,
+                "grok_helper": _grok_build is not None,
                 "router": {
                     "enabled": _router_is_enabled(),
                     "id": ROUTER.get("id"),

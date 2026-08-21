@@ -102,6 +102,11 @@ id up in `config.json` → `routes` and forwards accordingly:
   StepFun, Ollama, OpenRouter, OpenAI, local llama.cpp/LM Studio, etc.
 - **`codex_oauth`** — sends to GPT‑5.5 via your ChatGPT/Codex *login* (no API
   key), using `providers/codex_oauth.py` and the token from `codex login`.
+- **`grok_build`** — sends to xAI Grok via your Grok *login* (SuperGrok / X
+  subscription, no API key). `providers/grok_build.py` reads the token from
+  `grok login --oauth` (`~/.grok/auth.json`), refreshes it against `auth.x.ai`,
+  and reuses the `openai_compat` path pointed at `api.x.ai` — Grok speaks plain
+  Chat Completions, so tools and streaming work unchanged.
 - **`cursor_agent`** (experimental) — bridges to Cursor's Composer through the
   `cursor-agent` CLI via `providers/cursor_agent.py`. Reasoning works well;
   tool-calling is a best-effort text bridge.
@@ -289,6 +294,7 @@ regress.
 |------|------|
 | `proxy.py` | the interceptor: envelope + `/v1/models` discovery + routing. Stdlib only. |
 | `providers/codex_oauth.py` | optional GPT‑5.5-via-ChatGPT-login helper. Stdlib only. |
+| `providers/grok_build.py` | optional xAI-Grok-via-Grok-login token helper. Stdlib only. |
 | `providers/cursor_agent.py` | optional Cursor Composer bridge (experimental). Stdlib only. |
 | `config.json` | your models + routes + keys (copied from `config.example.json`; gitignored). |
 | `test_proxy.py` | offline end-to-end self-test (no network/keys). |

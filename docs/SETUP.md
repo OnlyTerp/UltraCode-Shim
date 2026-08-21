@@ -11,7 +11,7 @@ Works on **Windows 11** (no WSL required) and on **macOS / Linux / WSL**.
 | Python 3.8+ | `python --version` / `python3 --version` | https://www.python.org/downloads (Windows: tick **Add Python to PATH**) |
 | Claude Code CLI | `claude --version` | `npm i -g @anthropic-ai/claude-code` |
 | UltraCode access | you've used `/effort ultracode` before | part of your Claude plan |
-| ≥1 backend credential | — | an API key and/or `codex login` (see below) |
+| ≥1 backend credential | — | an API key and/or a login (`codex login` / `grok login --oauth`) (see below) |
 
 There is **nothing to pip install** — the proxy is pure standard library.
 
@@ -72,6 +72,18 @@ If you want the `codex_oauth` backend:
 2. Keep the `claude-gpt-5.5-codex` entries in the example configs (or add your own).
 
 No API key is needed for this path — it reuses your ChatGPT login.
+
+### Grok via a Grok subscription login (optional)
+
+If you want the `grok_build` backend (uses your SuperGrok / X Premium+ plan, not
+a metered xAI API key):
+
+1. Install the official Grok CLI and run `grok login --oauth` once — or
+   `grok login --device-auth` on a headless box. This creates `~/.grok/auth.json`.
+2. Keep the `claude-grok-4-6` entries in the example configs (or add your own,
+   with `"type": "grok_build"` and a real xAI `model` like `grok-4.6`).
+
+No API key is needed — the proxy reads that login token and refreshes it for you.
 
 ## 4. Sanity-check the config (optional)
 
