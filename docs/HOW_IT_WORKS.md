@@ -105,8 +105,11 @@ id up in `config.json` → `routes` and forwards accordingly:
 - **`grok_build`** — sends to xAI Grok via your Grok *login* (SuperGrok / X
   subscription, no API key). `providers/grok_build.py` reads the token from
   `grok login --oauth` (`~/.grok/auth.json`), refreshes it against `auth.x.ai`,
-  and reuses the `openai_compat` path pointed at `api.x.ai` — Grok speaks plain
-  Chat Completions, so tools and streaming work unchanged.
+  and reuses the `openai_compat` path pointed at xAI's subscription endpoint
+  (`cli-chat-proxy.grok.com`, pinned; the token is never sent to a route-supplied
+  `upstream`) with the CLI session headers — Grok speaks plain Chat Completions,
+  so tools and streaming work unchanged. Refresh is serialized across the proxy's
+  handler threads so the rotating refresh token is never double-spent.
 - **`cursor_agent`** (experimental) — bridges to Cursor's Composer through the
   `cursor-agent` CLI via `providers/cursor_agent.py`. Reasoning works well;
   tool-calling is a best-effort text bridge.

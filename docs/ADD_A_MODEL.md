@@ -194,15 +194,25 @@ needed. Optional env knobs: `UC_CODEX_EFFORT`, `UC_CODEX_SERVICE_TIER`,
 Uses your **Grok subscription** (SuperGrok / X Premium+), not a metered xAI API
 key. Run `grok login --oauth` once — or `grok login --device-auth` on a headless
 box — with the official Grok CLI (creates `~/.grok/auth.json`). No `auth` or
-`upstream` needed: the proxy reads that token, refreshes it against `auth.x.ai`
-when it nears its ~6h expiry, and calls `https://api.x.ai/v1` (plain OpenAI Chat
-Completions), so tool-calling and streaming work through the normal path.
+`upstream` needed and both are **ignored on purpose**: the proxy selects the
+subscription (OIDC) credential, refreshes it against `auth.x.ai` when it nears its
+~6h expiry (serialized across threads/processes so the rotating refresh token is
+never double-spent), and routes to xAI's **pinned** subscription endpoint
+`https://cli-chat-proxy.grok.com/v1` with the required CLI session headers
+(`X-XAI-Token-Auth`, `x-grok-client-version`, `x-grok-model-override`, …). Pinning
+keeps the implicitly-loaded login token from ever being sent to another host.
+Plain OpenAI Chat Completions, so tool-calling and streaming work as usual. There
+is **no** silent fallback to the metered `api.x.ai` surface — if the subscription
+proxy rejects the request (e.g. an out-of-date CLI: run `grok update`), the route
+errors rather than quietly billing you. For metered API access, add a separate
+`openai_compat` route with an `XAI_API_KEY` instead.
 
 `model` is xAI's real id: `grok-4.6`, `grok-4.5`, `grok-4.3`, the `grok-4.20`
 variants, etc. Grok returns its chain-of-thought in a separate `reasoning_content`
 field, so — unlike MiniMax-M3 — you do **not** need `body.reasoning_split`.
-Optional env knobs: `GROK_HOME` (default `~/.grok`), `UC_GROK_TOKEN_URL`,
-`UC_GROK_REFRESH_SKEW` (seconds before expiry to refresh, default 120).
+Optional env knobs: `GROK_HOME` (default `~/.grok`), `UC_GROK_BASE_URL`,
+`UC_GROK_TOKEN_URL`, `UC_GROK_REFRESH_SKEW` (seconds before expiry, default 120),
+`UC_GROK_CLIENT_VERSION` (override the CLI version header).
 
 ### `cursor_agent` — Cursor Composer (experimental)
 

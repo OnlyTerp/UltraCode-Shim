@@ -1921,31 +1921,42 @@ def _classifier_complete(slot, system_prompt, user_content, timeout):
                 raise RuntimeError(ev.get("message") or "codex classifier error")
         return "".join(text)
 
-    if stype == "openai_compat":
-        url = (slot.get("upstream") or UPSTREAM).rstrip("/") + "/chat/completions"
+    # openai_compat and grok_build both classify via a Chat Completions POST;
+    # grok_build just pins the CLI proxy + mints its session headers/token.
+    if stype in ("openai_compat", "grok_build"):
+        model = slot.get("model")
+        sbody = slot.get("body") if stype == "openai_compat" else None
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if stype == "grok_build":
+            if _grok_build is None:
+                raise RuntimeError("grok_build classifier needs providers/grok_build.py")
+            url = _grok_build.base_url().rstrip("/") + "/chat/completions"
+            headers.update(_grok_build.request_headers(model))
+            headers["Authorization"] = "Bearer " + _grok_build.access_token()
+        else:
+            url = (slot.get("upstream") or UPSTREAM).rstrip("/") + "/chat/completions"
+            headers["User-Agent"] = BROWSER_UA
+            headers["Accept-Language"] = "en-US,en;q=0.9"
+            auth = slot.get("auth")
+            if auth and auth != "passthrough":
+                Handler._apply_auth_header(headers, auth)
+            else:
+                headers["Authorization"] = "Bearer unused"
+            for hk, hv in (slot.get("headers") or {}).items():
+                headers[hk] = hv
         payload = {
-            "model": slot.get("model"),
+            "model": model,
             "stream": False,
             "temperature": 0,
             "max_tokens": ROUTER_MAX_TOKENS,
             "messages": [{"role": "system", "content": system_prompt},
                          {"role": "user", "content": user_content}],
         }
-        sbody = slot.get("body")
         if isinstance(sbody, dict):
             for bk, bv in sbody.items():
                 payload[bk] = _expand_env(bv) if isinstance(bv, str) else bv
         data = json.dumps(payload).encode("utf-8")
-        headers = {"Content-Type": "application/json", "Accept": "application/json",
-                   "Content-Length": str(len(data)), "User-Agent": BROWSER_UA,
-                   "Accept-Language": "en-US,en;q=0.9"}
-        auth = slot.get("auth")
-        if auth and auth != "passthrough":
-            Handler._apply_auth_header(headers, auth)
-        else:
-            headers["Authorization"] = "Bearer unused"
-        for hk, hv in (slot.get("headers") or {}).items():
-            headers[hk] = hv
+        headers["Content-Length"] = str(len(data))
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         resp = urllib.request.urlopen(req, timeout=timeout)
         try:
@@ -2553,16 +2564,18 @@ class Handler(BaseHTTPRequestHandler):
                 "grok_build route requires providers/grok_build.py and a Grok "
                 "login (run: grok login --oauth). See docs/ADD_A_MODEL.md.")
             return
-        # Grok speaks plain OpenAI Chat Completions, so we only mint a fresh
-        # OAuth access token here and hand the request to the shared
-        # openai_compat path pointed at api.x.ai -- no duplicate streaming or
-        # tool-call translation.
+        # Grok speaks plain OpenAI Chat Completions, so we mint a subscription
+        # token + the CLI-proxy session headers here and reuse the openai_compat
+        # path. The endpoint is PINNED to the CLI proxy and any route-supplied
+        # `upstream` is ignored: the OAuth bearer is implicitly loaded, so it must
+        # never be sent to an arbitrary host. No metered api.x.ai fallback.
+        model = route.get("model")
         try:
             token = _grok_build.access_token()
+            headers = _grok_build.request_headers(model)
+            upstream = _grok_build.base_url()
         except Exception as e:
-            # Surface a clear "run grok login" as visible assistant text on a
-            # streaming turn (an opaque JSON error won't render in Claude Code).
-            want_stream, model_id = False, route.get("model") or "grok"
+            want_stream, model_id = False, model or "grok"
             try:
                 _b = json.loads(body.decode("utf-8"))
                 want_stream = bool(_b.get("stream", False))
@@ -2572,8 +2585,12 @@ class Handler(BaseHTTPRequestHandler):
             self._emit_or_error(want_stream, model_id, 401, "grok_build auth: %s" % e)
             return
         route2 = dict(route)
-        route2["upstream"] = (route.get("upstream") or "https://api.x.ai/v1").rstrip("/")
+        route2["upstream"] = upstream
         route2["auth"] = "Bearer " + token
+        # Merge our session headers under any the user set (ours take precedence).
+        merged = dict(route.get("headers") or {})
+        merged.update(headers)
+        route2["headers"] = merged
         self._handle_openai_compat(body, route2)
 
     # ---- cursor_agent backend (Cursor Composer via the cursor-agent CLI) ----

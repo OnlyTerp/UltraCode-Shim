@@ -50,7 +50,7 @@
       "model": "gpt-5.5"
     },
     "claude-grok-4-6": {
-      "_": "xAI Grok via your Grok CLI login (SuperGrok / X subscription), NOT a metered xAI API key. Run `grok login --oauth` once (or `grok login --device-auth` on a headless box); the proxy reads ~/.grok/auth.json and refreshes the token itself. No 'auth' key needed here. 'upstream' defaults to https://api.x.ai/v1. 'model' is xAI's real id (grok-4.6, grok-4.5, grok-4.3, ...). Grok returns reasoning in a separate field, so no reasoning_split is needed.",
+      "_": "xAI Grok via your Grok CLI login (SuperGrok / X subscription), NOT a metered xAI API key. Run `grok login --oauth` once (or `grok login --device-auth` on a headless box); the proxy reads ~/.grok/auth.json, refreshes the OAuth token itself, and routes to xAI's subscription endpoint (cli-chat-proxy.grok.com) with the required session headers. No 'auth' or 'upstream' key: the endpoint is pinned so the login token is never sent elsewhere. 'model' is xAI's real id (grok-4.6, grok-4.5, grok-4.3, ...). Grok returns reasoning in a separate field, so no reasoning_split is needed.",
       "type": "grok_build",
       "model": "grok-4.6",
       "max_output_tokens": 16384
