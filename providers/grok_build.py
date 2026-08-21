@@ -23,11 +23,15 @@ bearer, and headers.
 
 WHY THE CLI PROXY (not api.x.ai)
 --------------------------------
-xAI resolves OAuth/session inference to https://cli-chat-proxy.grok.com/v1;
-api.x.ai is the API-KEY surface. Routing a subscription token to api.x.ai works
-but bills the metered surface, breaking the "use your subscription" contract. So
-the endpoint is PINNED and a route-supplied `upstream` is ignored (sending the
-implicitly-loaded OAuth bearer to an arbitrary host would leak it).
+The official Grok CLI does session inference against
+https://cli-chat-proxy.grok.com/v1 (its default); xAI's own endpoint resolver
+comments that api.x.ai "is the inference endpoint (API-key auth) only." A
+subscription token also works against api.x.ai, but that is the API-key surface,
+not the sanctioned session path, so the endpoint is PINNED to the CLI proxy. A
+route-supplied `upstream` is ignored (sending the implicitly-loaded OAuth bearer
+to an arbitrary host would leak it). (Whether api.x.ai bills a subscription token
+differently is unverified -- the pin follows xAI's client design, not a measured
+billing difference.)
 
 ENV KNOBS
 ---------

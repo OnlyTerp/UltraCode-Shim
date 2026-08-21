@@ -159,9 +159,9 @@ turns; the proxy handles that automatically.
   checkout.
 - **Grok 426 / "client version outdated":** xAI's subscription proxy
   (`cli-chat-proxy.grok.com`) gates on the CLI version. Run `grok update`, or set
-  `UC_GROK_CLIENT_VERSION` to a currently-accepted version. There is **no** silent
-  fallback to metered `api.x.ai`: for metered API use, add a separate
-  `openai_compat` route with an `XAI_API_KEY`.
+  `UC_GROK_CLIENT_VERSION` to a currently-accepted version. There is **no**
+  fallback to `api.x.ai` (xAI's API-key surface): for pay-per-token API-key use,
+  add a separate `openai_compat` route with an `XAI_API_KEY`.
 - **Grok "no usable Grok subscription (OIDC) login":** your `~/.grok/auth.json`
   has only an xAI API key or a legacy/empty entry. `grok_build` needs a
   subscription OIDC login — run `grok login --oauth`.

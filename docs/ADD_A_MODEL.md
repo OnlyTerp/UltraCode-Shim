@@ -196,15 +196,16 @@ key. Run `grok login --oauth` once — or `grok login --device-auth` on a headle
 box — with the official Grok CLI (creates `~/.grok/auth.json`). No `auth` or
 `upstream` needed and both are **ignored on purpose**: the proxy selects the
 subscription (OIDC) credential, refreshes it against `auth.x.ai` when it nears its
-~6h expiry (serialized across threads/processes so the rotating refresh token is
-never double-spent), and routes to xAI's **pinned** subscription endpoint
-`https://cli-chat-proxy.grok.com/v1` with the required CLI session headers
-(`X-XAI-Token-Auth`, `x-grok-client-version`, `x-grok-model-override`, …). Pinning
-keeps the implicitly-loaded login token from ever being sent to another host.
-Plain OpenAI Chat Completions, so tool-calling and streaming work as usual. There
-is **no** silent fallback to the metered `api.x.ai` surface — if the subscription
-proxy rejects the request (e.g. an out-of-date CLI: run `grok update`), the route
-errors rather than quietly billing you. For metered API access, add a separate
+~6h expiry (serialized across the proxy's handler threads so the rotating refresh
+token is never double-spent), and routes to the **pinned** endpoint the official
+Grok CLI uses for session inference, `https://cli-chat-proxy.grok.com/v1`, with
+the required CLI session headers (`X-XAI-Token-Auth`, `x-grok-client-version`,
+`x-grok-model-override`, …). Pinning keeps the implicitly-loaded login token from
+ever being sent to another host. Plain OpenAI Chat Completions, so tool-calling
+and streaming work as usual. There is **no** fallback to `api.x.ai` (xAI's own
+resolver labels it the API-key surface) — if the session proxy rejects the request
+(e.g. an out-of-date CLI: run `grok update`), the route errors rather than silently
+switching surfaces. For pay-per-token API-key access, add a separate
 `openai_compat` route with an `XAI_API_KEY` instead.
 
 `model` is xAI's real id: `grok-4.6`, `grok-4.5`, `grok-4.3`, the `grok-4.20`

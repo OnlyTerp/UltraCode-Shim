@@ -2568,7 +2568,8 @@ class Handler(BaseHTTPRequestHandler):
         # token + the CLI-proxy session headers here and reuse the openai_compat
         # path. The endpoint is PINNED to the CLI proxy and any route-supplied
         # `upstream` is ignored: the OAuth bearer is implicitly loaded, so it must
-        # never be sent to an arbitrary host. No metered api.x.ai fallback.
+        # never be sent to an arbitrary host. No fallback to api.x.ai (the
+        # API-key surface per xAI's own resolver), so we stay on the session path.
         model = route.get("model")
         try:
             token = _grok_build.access_token()

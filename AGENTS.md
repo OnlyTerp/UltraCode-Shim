@@ -69,7 +69,8 @@ Ask the user which of these they have (only configure those):
   token itself, and routes to xAI's subscription endpoint
   (`cli-chat-proxy.grok.com`) with the required session headers. The endpoint is
   pinned (the login token is never sent to a route-supplied `upstream`), and
-  there is no metered `api.x.ai` fallback. See `docs/ADD_A_MODEL.md`.
+  there is no `api.x.ai` fallback (that is xAI's API-key surface). See
+  `docs/ADD_A_MODEL.md`.
 - Just **Claude** → they can still use it, routed as Anthropic passthrough. No
   savings, but UltraCode works. **You don't need to configure real Claude at
   all:** the proxy always advertises the stock Claude models (Opus/Sonnet/Haiku)
