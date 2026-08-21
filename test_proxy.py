@@ -273,6 +273,150 @@ def main():
         assert up._expand_env("Bearer ${MOCK_KEY}") == "Bearer secret123"
         print("[ok] ${ENV} expansion in route auth")
 
+        # grok_build helper: selects the OIDC subscription credential from
+        # ~/.grok/auth.json, refreshes it (serialized) near expiry, pins the CLI
+        # proxy + session headers, and persists non-destructively. Fully offline:
+        # GROK_HOME is a tmp dir and the refresh HTTP call is monkeypatched.
+        import tempfile as _tf, importlib as _il, threading as _th, time as _tm
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        _gb = _il.import_module("providers.grok_build")
+        _grok_home = _tf.mkdtemp(suffix="_uc_grok")
+        _saved_grok_home = os.environ.get("GROK_HOME")
+        os.environ["GROK_HOME"] = _grok_home
+        os.environ["UC_GROK_TOKEN_URL"] = "http://127.0.0.1:9/oauth2/token"  # never really hit
+        os.environ["UC_GROK_CLIENT_VERSION"] = "1.0.5"  # avoid needing the grok CLI
+        _auth_p = os.path.join(_grok_home, "auth.json")
+        _KEY = "https://auth.x.ai::client-xyz"
+
+        def _oidc(expires_dt, key="live-token", extra=None):
+            e = {"key": key, "refresh_token": "refresh-abc",
+                 "expires_at": (expires_dt.isoformat().replace("+00:00", "Z")
+                                if expires_dt else None),
+                 "create_time": _dt.now(_tz.utc).isoformat().replace("+00:00", "Z"),
+                 "oidc_issuer": "https://auth.x.ai", "oidc_client_id": "client-xyz",
+                 "auth_mode": "oidc", "principal_type": "User", "principal_id": "pid-1"}
+            if extra:
+                e.update(extra)
+            return e
+
+        def _write(state):
+            json.dump(state, open(_auth_p, "w"))
+            _gb._CACHE.clear()  # forget any cached token between scenarios
+
+        class _FakeResp:
+            def __init__(self, payload): self._p = payload.encode("utf-8")
+            def read(self): return self._p
+        _refresh_calls = {"n": 0, "last": ""}
+
+        def _mk_urlopen(delay=0.0, newkey="fresh-token"):
+            def _fake(req, timeout=0):
+                _refresh_calls["last"] = (req.data or b"").decode("utf-8")
+                _refresh_calls["n"] += 1
+                if delay:
+                    _tm.sleep(delay)
+                return _FakeResp(json.dumps({"access_token": newkey,
+                                             "refresh_token": "refresh-def",
+                                             "expires_in": 3600}))
+            return _fake
+        _real_urlopen = _gb.urllib.request.urlopen
+        try:
+            # Not logged in -> available() False, clear error.
+            assert _gb.available() is False, "no auth.json should be unavailable"
+            try:
+                _gb.access_token(); assert False, "expected GrokAuthError with no auth.json"
+            except _gb.GrokAuthError:
+                pass
+
+            # OIDC selection: an api-key-only + legacy entry must be ignored; the
+            # subscription (OIDC) entry is chosen. A metered key is NEVER used.
+            _write({"xai::api_key": {"key": "xai-METERED", "auth_mode": "api_key"},
+                    "https://accounts.x.ai/sign-in": {"key": "legacy-no-refresh"},
+                    _KEY: _oidc(_dt.now(_tz.utc) + _td(hours=1))})
+            assert _gb.available() is True
+            assert _gb.access_token() == "live-token", "must pick the OIDC subscription token"
+
+            # Fresh token -> returned as-is, no network.
+            _gb.urllib.request.urlopen = (lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not refresh a fresh token")))
+            assert _gb.access_token() == "live-token"
+            _gb.urllib.request.urlopen = _real_urlopen
+
+            # Expired -> refresh; form carries principal_type/principal_id; persisted
+            # + reused (no 2nd refresh).
+            _write({_KEY: _oidc(_dt.now(_tz.utc) - _td(minutes=5), key="stale")})
+            _refresh_calls["n"] = 0
+            _gb.urllib.request.urlopen = _mk_urlopen()
+            try:
+                assert _gb.access_token() == "fresh-token", "expired token must refresh"
+                assert _gb.access_token() == "fresh-token", "reused without a 2nd refresh"
+            finally:
+                _gb.urllib.request.urlopen = _real_urlopen
+            assert _refresh_calls["n"] == 1, ("exactly one refresh", _refresh_calls["n"])
+            for f in ("grant_type=refresh_token", "refresh_token=refresh-abc",
+                      "principal_type=User", "principal_id=pid-1"):
+                assert f in _refresh_calls["last"], (f, _refresh_calls["last"])
+            _disk = json.load(open(_auth_p))[_KEY]
+            assert _disk["key"] == "fresh-token" and _disk["refresh_token"] == "refresh-def"
+
+            # Concurrency: many threads on an expired token -> exactly ONE refresh
+            # (process lock + in-memory cache dedupe the rotating refresh token).
+            _write({_KEY: _oidc(_dt.now(_tz.utc) - _td(minutes=5), key="stale2")})
+            _refresh_calls["n"] = 0
+            _gb.urllib.request.urlopen = _mk_urlopen(delay=0.05)
+            _out = []
+            def _worker(): _out.append(_gb.access_token())
+            ts = [_th.Thread(target=_worker) for _ in range(8)]
+            for t in ts: t.start()
+            for t in ts: t.join()
+            _gb.urllib.request.urlopen = _real_urlopen
+            assert _refresh_calls["n"] == 1, ("one refresh under concurrency", _refresh_calls["n"])
+            assert _out == ["fresh-token"] * 8, _out
+
+            # Safe persist: an unreadable existing file must NOT be clobbered
+            # (would wipe other scopes). _persist should skip the write.
+            open(_auth_p, "w").write("{ this is not json")
+            _gb._persist(_KEY, _oidc(_dt.now(_tz.utc) + _td(hours=1)))
+            assert open(_auth_p).read() == "{ this is not json", "must not overwrite unreadable auth.json"
+            # And a readable file keeps unrelated scopes when persisting.
+            _write({"xai::api_key": {"key": "keep-me"}, _KEY: _oidc(_dt.now(_tz.utc) + _td(hours=1))})
+            _gb._persist(_KEY, _oidc(_dt.now(_tz.utc) + _td(hours=2), key="rotated"))
+            _after = json.load(open(_auth_p))
+            assert _after["xai::api_key"]["key"] == "keep-me", "other scopes preserved"
+            assert _after[_KEY]["key"] == "rotated"
+
+            # Expiry policy: missing expires_at -> create_time+30d (no refresh);
+            # malformed expires_at -> force refresh.
+            _write({_KEY: _oidc(None, key="nocexp")})   # missing expires_at, create_time=now
+            _gb.urllib.request.urlopen = (lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("missing-expiry within 30d must not refresh")))
+            assert _gb.access_token() == "nocexp"
+            _gb.urllib.request.urlopen = _real_urlopen
+            _write({_KEY: _oidc(_dt.now(_tz.utc) + _td(hours=1), key="bad", extra={"expires_at": "not-a-date"})})
+            _refresh_calls["n"] = 0
+            _gb.urllib.request.urlopen = _mk_urlopen(newkey="reparsed")
+            try:
+                assert _gb.access_token() == "reparsed", "malformed expiry must force a refresh"
+            finally:
+                _gb.urllib.request.urlopen = _real_urlopen
+            assert _refresh_calls["n"] == 1
+
+            # Endpoint is PINNED to the CLI proxy; session headers are present.
+            assert _gb.base_url() == "https://cli-chat-proxy.grok.com/v1", _gb.base_url()
+            h = _gb.request_headers("grok-4.6")
+            assert h["X-XAI-Token-Auth"] == "xai-grok-cli", h
+            assert h["x-grok-client-version"] == "1.0.5", h
+            assert h["x-grok-model-override"] == "grok-4.6", h
+        finally:
+            _gb.urllib.request.urlopen = _real_urlopen
+            _gb._CACHE.clear()
+            if _saved_grok_home is None:
+                os.environ.pop("GROK_HOME", None)
+            else:
+                os.environ["GROK_HOME"] = _saved_grok_home
+            for _v in ("UC_GROK_TOKEN_URL", "UC_GROK_CLIENT_VERSION"):
+                os.environ.pop(_v, None)
+        print("[ok] grok_build: OIDC select, serialized refresh, safe persist, expiry policy, pinned proxy")
+
         # Stock Claude models: the built-in fallback so real Claude stays in
         # /model even with no upstream list. Toggle + override are honored, and
         # every advertised id obeys Claude Code's /^(claude|anthropic)/i rule.

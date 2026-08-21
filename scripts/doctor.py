@@ -174,6 +174,26 @@ def main():
                 else note("route '%s': cursor-agent not found - install it and run "
                           "`cursor-agent login` (this backend is experimental)" % name)
             continue
+        if rtype == "grok_build":
+            auth = Path(os.environ.get("GROK_HOME", str(Path.home() / ".grok"))) / "auth.json"
+            # A file alone isn't enough: confirm a real subscription (OIDC) entry
+            # (empty/malformed/api-key-only auth.json must not read as "ok").
+            eligible = False
+            try:
+                sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+                from providers import grok_build as _gb  # type: ignore
+                eligible = _gb.available()
+            except Exception:
+                eligible = None  # helper not importable; fall back to file check
+            if eligible:
+                ok("route '%s': Grok subscription login found (%s)" % (name, auth))
+            elif eligible is None and auth.is_file():
+                note("route '%s': %s present but could not validate it "
+                     "(providers/grok_build.py not importable)" % (name, auth))
+            else:
+                note("route '%s': no usable Grok subscription login - run "
+                     "`grok login --oauth` (an xAI API key alone is not enough)" % name)
+            continue
         # anthropic passthrough or openai_compat: validate the credential.
         auth = route.get("auth", "")
         refs = set(referenced_vars(auth))

@@ -20,6 +20,7 @@
     { "id": "claude-auto",              "display_name": "Auto (smart routing)" },
     { "id": "claude-opus",              "display_name": "Claude Opus 4.8 (real)" },
     { "id": "claude-gpt-5.5-codex",     "display_name": "GPT-5.5 (Codex OAuth)" },
+    { "id": "claude-grok-4-6",          "display_name": "Grok 4.6 (xAI login)" },
     { "id": "claude-minimax-m3",        "display_name": "MiniMax-M3" },
     { "id": "claude-mimo",              "display_name": "MiMo v2.5 Pro" },
     { "id": "claude-deepseek-v4-pro",   "display_name": "DeepSeek V4 Pro" },
@@ -33,7 +34,7 @@
     { "id": "claude-composer",          "display_name": "Composer 2.5 (Cursor, experimental)" }
   ],
 
-  "_routes": "Where each model id above goes. The key MUST match an id in 'models'. Put your API key right here (config.json is gitignored) or use ${ENV_VAR} and set it in your environment. type: omit/'anthropic' = passthrough to Anthropic; 'openai_compat' = any OpenAI Chat Completions backend (with tool-calling); 'codex_oauth' = GPT-5.5 via `codex login`; 'cursor_agent' = Cursor Composer via the cursor-agent CLI (experimental). For openai_compat, 'upstream' is the base URL exactly as the provider documents it (usually ends in /v1) - the proxy appends /chat/completions. Optional: 'headers' {}, 'max_output_tokens' (default 8192).",
+  "_routes": "Where each model id above goes. The key MUST match an id in 'models'. Put your API key right here (config.json is gitignored) or use ${ENV_VAR} and set it in your environment. type: omit/'anthropic' = passthrough to Anthropic; 'openai_compat' = any OpenAI Chat Completions backend (with tool-calling); 'codex_oauth' = GPT-5.5 via `codex login`; 'grok_build' = xAI Grok via `grok login --oauth` (your Grok subscription, no API key); 'cursor_agent' = Cursor Composer via the cursor-agent CLI (experimental). For openai_compat, 'upstream' is the base URL exactly as the provider documents it (usually ends in /v1) - the proxy appends /chat/completions. Optional: 'headers' {}, 'max_output_tokens' (default 8192).",
   "routes": {
     "claude-auto": {
       "_": "The Auto Router. type:auto means this is NOT a real backend - the proxy asks the cheap 'classifier' model (configured in the 'router' block below) to score the candidates and routes each task to the cheapest one that clears the quality bar. Pick 'Auto (smart routing)' in /model or the selector.",
@@ -47,6 +48,12 @@
       "_": "Needs `codex login` once; no API key. effort/tier via UC_CODEX_EFFORT/UC_CODEX_SERVICE_TIER.",
       "type": "codex_oauth",
       "model": "gpt-5.5"
+    },
+    "claude-grok-4-6": {
+      "_": "xAI Grok via your Grok CLI login (SuperGrok / X subscription), NOT a metered xAI API key. Run `grok login --oauth` once (or `grok login --device-auth` on a headless box); the proxy reads ~/.grok/auth.json, refreshes the OAuth token itself, and routes to xAI's subscription endpoint (cli-chat-proxy.grok.com) with the required session headers. No 'auth' or 'upstream' key: the endpoint is pinned so the login token is never sent elsewhere. 'model' is xAI's real id (grok-4.6, grok-4.5, grok-4.3, ...). Grok returns reasoning in a separate field, so no reasoning_split is needed.",
+      "type": "grok_build",
+      "model": "grok-4.6",
+      "max_output_tokens": 16384
     },
     "claude-minimax-m3": {
       "_": "MiniMax-M3 via api.minimax.io (OpenAI-compatible). Get a key at platform.minimax.io. IMPORTANT: 'body.reasoning_split' keeps M3's <think> chain-of-thought OUT of the visible answer (delivered as reasoning_content instead). Drop it and you'll see raw <think>...</think> in replies. M3 supports ~1M context; max_output_tokens up to 64000.",

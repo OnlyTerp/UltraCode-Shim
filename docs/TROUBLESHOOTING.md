@@ -151,6 +151,20 @@ turns; the proxy handles that automatically.
   `upstream` is wrong.
 - **Codex 401 / "run codex login":** your ChatGPT/Codex token expired — run
   `codex login` again.
+- **Grok "grok_build auth" / 401:** the Grok login token could not be read or
+  refreshed. Run `grok login --oauth` again (creates/updates `~/.grok/auth.json`).
+  The proxy auto-refreshes the ~6h token, but a fully expired refresh token or a
+  lapsed subscription needs a fresh login. `grok_build` routes need
+  `providers/grok_build.py` present; if it 501s, the file is missing from the
+  checkout.
+- **Grok 426 / "client version outdated":** xAI's subscription proxy
+  (`cli-chat-proxy.grok.com`) gates on the CLI version. Run `grok update`, or set
+  `UC_GROK_CLIENT_VERSION` to a currently-accepted version. There is **no**
+  fallback to `api.x.ai` (xAI's API-key surface): for pay-per-token API-key use,
+  add a separate `openai_compat` route with an `XAI_API_KEY`.
+- **Grok "no usable Grok subscription (OIDC) login":** your `~/.grok/auth.json`
+  has only an xAI API key or a legacy/empty entry. `grok_build` needs a
+  subscription OIDC login — run `grok login --oauth`.
 - **Occasional empty reply:** some upstreams (notably GPT‑5.5 via codex at high
   effort, or a flaky OpenAI‑compatible backend) now and then return a turn with no
   text and no tool call. The proxy auto-retries a fresh turn (default 2 retries)

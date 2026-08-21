@@ -63,6 +63,14 @@ Ask the user which of these they have (only configure those):
   OpenRouter, OpenAI, Ollama, a local llama.cpp/LM Studio server, etc.) → use
   `openai_compat`.
 - A **ChatGPT/Codex login** for GPT‑5.5 → use `codex_oauth` (run `codex login`).
+- A **Grok subscription** (SuperGrok / X Premium+) with the official Grok CLI →
+  use `grok_build` (run `grok login --oauth`, or `grok login --device-auth` on a
+  headless box). No API key: the proxy reads `~/.grok/auth.json`, refreshes the
+  token itself, and routes to xAI's subscription endpoint
+  (`cli-chat-proxy.grok.com`) with the required session headers. The endpoint is
+  pinned (the login token is never sent to a route-supplied `upstream`), and
+  there is no `api.x.ai` fallback (that is xAI's API-key surface). See
+  `docs/ADD_A_MODEL.md`.
 - Just **Claude** → they can still use it, routed as Anthropic passthrough. No
   savings, but UltraCode works. **You don't need to configure real Claude at
   all:** the proxy always advertises the stock Claude models (Opus/Sonnet/Haiku)
@@ -133,7 +141,9 @@ python3 scripts/doctor.py
 ```
 Now it validates the user's actual `config.json`: ids are discoverable+routed,
 every `${VAR}` referenced by a route is present (or the key is inline), and
-`codex_oauth`/`cursor_agent` routes have their login/CLI. Fix every `[FAIL]`
+`codex_oauth`/`grok_build`/`cursor_agent` routes have their login/CLI (for
+`grok_build`, that a usable Grok subscription/OIDC entry exists — `grok login
+--oauth`). Fix every `[FAIL]`
 (each prints its fix) until exit code 0.
 
 ## Phase 5 — Launch
