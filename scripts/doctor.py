@@ -174,6 +174,11 @@ def main():
                 else note("route '%s': cursor-agent not found - install it and run "
                           "`cursor-agent login` (this backend is experimental)" % name)
             continue
+        if rtype == "grok_build":
+            auth = Path(os.environ.get("GROK_HOME", str(Path.home() / ".grok"))) / "auth.json"
+            ok("route '%s': Grok login found (%s)" % (name, auth)) if auth.is_file() \
+                else note("route '%s': no %s - run `grok login --oauth` before using it" % (name, auth))
+            continue
         # anthropic passthrough or openai_compat: validate the credential.
         auth = route.get("auth", "")
         refs = set(referenced_vars(auth))

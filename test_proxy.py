@@ -273,6 +273,74 @@ def main():
         assert up._expand_env("Bearer ${MOCK_KEY}") == "Bearer secret123"
         print("[ok] ${ENV} expansion in route auth")
 
+        # grok_build helper: reads the Grok CLI's ~/.grok/auth.json, returns a
+        # valid token as-is, and refreshes (against auth.x.ai) only when the
+        # stored token is near/after expiry. Fully offline: GROK_HOME points at
+        # a tmp dir and the refresh HTTP call is monkeypatched.
+        import tempfile as _tf, importlib as _il
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        _gb = _il.import_module("providers.grok_build")
+        _grok_home = _tf.mkdtemp(suffix="_uc_grok")
+        _saved_grok_home = os.environ.get("GROK_HOME")
+        os.environ["GROK_HOME"] = _grok_home
+        os.environ["UC_GROK_TOKEN_URL"] = "http://127.0.0.1:9/oauth2/token"  # never really hit
+        _auth_p = os.path.join(_grok_home, "auth.json")
+
+        def _write_auth(expires_dt, key="live-token"):
+            entry = {
+                "key": key, "refresh_token": "refresh-abc",
+                "expires_at": expires_dt.isoformat().replace("+00:00", "Z"),
+                "oidc_issuer": "https://auth.x.ai", "oidc_client_id": "client-xyz",
+                "auth_mode": "oidc",
+            }
+            json.dump({"https://auth.x.ai::client-xyz": entry}, open(_auth_p, "w"))
+        try:
+            # Not logged in yet -> available() False and a clear error.
+            assert _gb.available() is False, "no auth.json should read as unavailable"
+            try:
+                _gb.access_token(); assert False, "expected GrokAuthError with no auth.json"
+            except _gb.GrokAuthError:
+                pass
+            # Fresh token (expires in 1h) is returned as-is, no refresh/network.
+            _write_auth(_dt.now(_tz.utc) + _td(hours=1))
+            assert _gb.available() is True
+            assert _gb.access_token() == "live-token", "valid token must be returned unchanged"
+            # Expired token triggers a refresh; monkeypatch urlopen to mint a new one.
+            _write_auth(_dt.now(_tz.utc) - _td(minutes=5), key="stale-token")
+
+            class _FakeResp:
+                def __init__(self, payload): self._p = payload.encode("utf-8")
+                def read(self): return self._p
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+            _seen = {}
+
+            def _fake_urlopen(req, timeout=0):
+                _seen["url"] = req.full_url
+                _seen["data"] = (req.data or b"").decode("utf-8")
+                return _FakeResp(json.dumps({
+                    "access_token": "fresh-token", "refresh_token": "refresh-def",
+                    "expires_in": 3600}))
+            _real_urlopen = _gb.urllib.request.urlopen
+            _gb.urllib.request.urlopen = _fake_urlopen
+            try:
+                assert _gb.access_token() == "fresh-token", "expired token must be refreshed"
+            finally:
+                _gb.urllib.request.urlopen = _real_urlopen
+            assert "grant_type=refresh_token" in _seen["data"], _seen
+            assert "refresh_token=refresh-abc" in _seen["data"], _seen
+            # Refresh must be persisted back so the NEXT call reuses it (no 2nd refresh).
+            _disk = json.load(open(_auth_p))["https://auth.x.ai::client-xyz"]
+            assert _disk["key"] == "fresh-token" and _disk["refresh_token"] == "refresh-def", _disk
+            assert _gb.access_token() == "fresh-token", "persisted fresh token reused without refresh"
+        finally:
+            if _saved_grok_home is None:
+                os.environ.pop("GROK_HOME", None)
+            else:
+                os.environ["GROK_HOME"] = _saved_grok_home
+            os.environ.pop("UC_GROK_TOKEN_URL", None)
+        print("[ok] grok_build: token read, refresh-on-expiry, persist + reuse")
+
         # Stock Claude models: the built-in fallback so real Claude stays in
         # /model even with no upstream list. Toggle + override are honored, and
         # every advertised id obeys Claude Code's /^(claude|anthropic)/i rule.

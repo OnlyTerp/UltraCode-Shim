@@ -311,6 +311,15 @@ except Exception:
     except Exception:
         _cursor_agent = None
 
+# Optional Grok OAuth helper (only needed for "grok_build" routes).
+try:
+    from providers import grok_build as _grok_build  # type: ignore
+except Exception:
+    try:
+        import grok_build as _grok_build  # type: ignore
+    except Exception:
+        _grok_build = None
+
 
 _ENV_TOKEN = "${"
 
@@ -2362,6 +2371,9 @@ class Handler(BaseHTTPRequestHandler):
             if rtype == "cursor_agent":
                 self._handle_cursor_agent(body, route)
                 return
+            if rtype == "grok_build":
+                self._handle_grok(body, route)
+                return
 
         # Anthropic passthrough.
         upstream = route.get("upstream") or UPSTREAM
@@ -2531,6 +2543,37 @@ class Handler(BaseHTTPRequestHandler):
             self._stream_anthropic_from_events(events, model_id)
         else:
             self._json_anthropic_from_events(events, model_id)
+
+    # ---- grok_build backend (xAI Grok via `grok login` OAuth) -----------
+    def _handle_grok(self, body: bytes, route: dict):
+        if _grok_build is None:
+            self._send_error(
+                501,
+                "grok_build route requires providers/grok_build.py and a Grok "
+                "login (run: grok login --oauth). See docs/ADD_A_MODEL.md.")
+            return
+        # Grok speaks plain OpenAI Chat Completions, so we only mint a fresh
+        # OAuth access token here and hand the request to the shared
+        # openai_compat path pointed at api.x.ai -- no duplicate streaming or
+        # tool-call translation.
+        try:
+            token = _grok_build.access_token()
+        except Exception as e:
+            # Surface a clear "run grok login" as visible assistant text on a
+            # streaming turn (an opaque JSON error won't render in Claude Code).
+            want_stream, model_id = False, route.get("model") or "grok"
+            try:
+                _b = json.loads(body.decode("utf-8"))
+                want_stream = bool(_b.get("stream", False))
+                model_id = _b.get("model") or model_id
+            except Exception:
+                pass
+            self._emit_or_error(want_stream, model_id, 401, "grok_build auth: %s" % e)
+            return
+        route2 = dict(route)
+        route2["upstream"] = (route.get("upstream") or "https://api.x.ai/v1").rstrip("/")
+        route2["auth"] = "Bearer " + token
+        self._handle_openai_compat(body, route2)
 
     # ---- cursor_agent backend (Cursor Composer via the cursor-agent CLI) ----
     def _handle_cursor_agent(self, body: bytes, route: dict):
@@ -2850,6 +2893,8 @@ def main():
         log("  codex_oauth helper not importable (codex_oauth routes will 501)")
     if _cursor_agent is None:
         log("  cursor_agent helper not importable (cursor_agent routes will 501)")
+    if _grok_build is None:
+        log("  grok_build helper not importable (grok_build routes will 501)")
     if _router_is_enabled():
         avail = _router_available_candidates()
         log("  Auto Router ON: id=%s classifier=%s threshold=%.2f candidates=%s"
