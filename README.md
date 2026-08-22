@@ -331,6 +331,7 @@ test → troubleshoot) written for an AI to follow.
 | [docs/DIRECTIVES.md](docs/DIRECTIVES.md) | Routing directives — pin a request to a model from the prompt (per-role multi-agent workflows) |
 | [docs/ADD_A_MODEL.md](docs/ADD_A_MODEL.md) | Add any backend to the `/model` menu |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptom → cause → fix |
+| [docs/ROUTING_ENGINE_SPEC.md](docs/ROUTING_ENGINE_SPEC.md) | Subscription- and quota-aware routing engine (design + scaffold) |
 
 ## License
 
