@@ -36,6 +36,11 @@ class RouteRegistry:
             route_type = route_cfg.get("type")
             if route_type is None:
                 route_type = "anthropic"  # config convention: missing type == real Claude
+            if route_type == "auto":
+                continue  # the Auto Router pseudo-backend is not a real provider route
+            valid_provider_types = {m.value for m in ProviderType}
+            if route_type not in valid_provider_types:
+                continue  # skip unknown / future route types until explicitly supported
             provider_type = ProviderType(route_type)
             registry.add(
                 Route(

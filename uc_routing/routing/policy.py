@@ -43,7 +43,7 @@ class SelectionPolicy:
             return False
         if has_tools and not profile.supports_tools:
             return False
-        return account.has_capacity_for("requests")
+        return account.can_fulfill_request(prompt_tokens, max_tokens)
 
     def effective_cost(
         self,

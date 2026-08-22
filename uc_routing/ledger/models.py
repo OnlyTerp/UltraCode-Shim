@@ -87,6 +87,43 @@ class Account:
                 return (ent.used + amount) <= ent.limit
         return False
 
+    def can_fulfill_request(
+        self, prompt_tokens: int = 0, completion_tokens: int = 0, amount: float = 1.0
+    ) -> bool:
+        """Return True if any entitlement can satisfy a request of this size.
+
+        This is the high-level capacity check used by the routing policy. It
+        derives the relevant unit from each entitlement's kind and unit rather
+        than requiring callers to know whether a subscription counts messages,
+        a prepaid pool counts USD/credits, or a local GPU counts concurrent slots.
+        """
+        now = datetime.now(timezone.utc)
+        token_need = float(prompt_tokens + completion_tokens)
+        for ent in self.entitlements:
+            if ent.cooldown_until and ent.cooldown_until > now:
+                continue
+            if ent.resets_at and ent.resets_at <= now:
+                return True
+            # Generic request quota used by simple/local placeholders.
+            if ent.unit == "requests":
+                if (ent.used + amount) <= ent.limit:
+                    return True
+                continue
+            if ent.kind == EntitlementKind.FIXED_WINDOW:
+                if ent.unit == "messages" and (ent.used + amount) <= ent.limit:
+                    return True
+                if ent.unit in ("input_tokens", "output_tokens", "tokens") and (
+                    ent.used + token_need
+                ) <= ent.limit:
+                    return True
+            elif ent.kind == EntitlementKind.PREPAID:
+                if ent.unit in ("USD", "credits") and ent.remaining > 0:
+                    return True
+            elif ent.kind == EntitlementKind.LOCAL_COMPUTE:
+                if (ent.current_load + amount) <= ent.limit:
+                    return True
+        return False
+
 
 @dataclass
 class Ledger:

@@ -42,12 +42,14 @@ class CircuitBreaker:
     def record_success(self, route_id: str) -> None:
         self.states[route_id] = CircuitState.CLOSED
         self.failures[route_id] = 0
+        self.half_open_count[route_id] = 0
 
     def record_failure(self, route_id: str) -> None:
         self.failures[route_id] = self.failures.get(route_id, 0) + 1
         if self.failures[route_id] >= self.failure_threshold:
             self.states[route_id] = CircuitState.OPEN
             self.opened_at[route_id] = datetime.now(timezone.utc)
+            self.half_open_count[route_id] = 0
 
     def can_try(self, route_id: str) -> bool:
         st = self.state(route_id)
@@ -55,4 +57,8 @@ class CircuitBreaker:
             return True
         if st == CircuitState.OPEN:
             return False
-        return self.half_open_count.get(route_id, 0) < self.half_open_max
+        count = self.half_open_count.get(route_id, 0)
+        if count < self.half_open_max:
+            self.half_open_count[route_id] = count + 1
+            return True
+        return False
